@@ -310,6 +310,9 @@ server <- function(input, output, session) {
       reverse = TRUE  # Reverse so dark = near, light = far
     )
 
+    # Pre-compute colors for each grid point
+    df$color <- pal(df$minutes)
+
     # Legend HTML with color scale
     legend_txt <- paste0(
       "<div style='background: rgba(255,255,255,0.95); padding: 10px; border-radius: 4px; font-size: 12px;'>",
@@ -330,7 +333,7 @@ server <- function(input, output, session) {
       addCircles(
         lng = df$lon, lat = df$lat,
         radius = input$radius * 10,  # Scale radius to meters
-        fillColor = ~pal(minutes),
+        fillColor = df$color,
         fillOpacity = 0.6,
         stroke = FALSE
       ) |>
