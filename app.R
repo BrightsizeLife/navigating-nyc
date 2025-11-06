@@ -17,6 +17,7 @@ library(dplyr)
 library(purrr)
 library(tidyr)
 library(stringr)
+library(scales)
 
 options(scipen = 999)
 dir.create("cache", showWarnings = FALSE)
@@ -205,6 +206,7 @@ ui <- page_fluid(
       ),
       sliderInput("walkCap", "Walk time cap for heatmap (minutes)", min = 3, max = 30, value = 15, step = 1),
       sliderInput("gridRes", "Heatmap grid resolution (coarser → faster)", min = 0.002, max = 0.01, value = 0.004, step = 0.001),
+      sliderInput("radius", "Heat radius", min = 10, max = 50, value = 25, step = 1),
       actionButton("refresh", "Fetch / Refresh Lines", icon = icon("rotate"))
     ),
     card(
@@ -255,38 +257,79 @@ server <- function(input, output, session) {
   })
   
   observe({
-    req(nrow(stations_rv()) > 0)
+    req(nrow(stations_rv()) > 0L)
+
     grid <- make_grid_points(NYC_BBOX, step_deg = input$gridRes)
+
+    # Guardrail: prevent UI freeze on huge grids
+    if (nrow(grid) > 30000) {
+      showNotification("Grid too large (>30k points); increase gridRes to avoid freeze.",
+                       type = "warning", duration = 6)
+      return()
+    }
+
     s_coords <- st_coordinates(stations_rv())
     g_coords <- st_coordinates(grid)
-    
+
     # For each grid point, compute distance to nearest station
-    # (vectorized via apply over stations; quick-and-dirty MVP)
     nearest_m <- sapply(seq_len(nrow(g_coords)), function(i) {
       d <- haversine_m(g_coords[i,1], g_coords[i,2], s_coords[,1], s_coords[,2])
       min(d)
     })
-    
+
     minutes <- pmin(approx_walk_minutes(nearest_m), input$walkCap)
+
+    # Console diagnostics
+    cat("\n=== Heatmap diagnostics ===\n")
+    cat("Grid points:", nrow(grid), "\n")
+    print(summary(minutes))
+    cat("SD:", round(sd(minutes), 2), "\n")
+    cat("% within 5 min:", round(100 * mean(minutes <= 5), 1), "%\n")
+    cat("% within 10 min:", round(100 * mean(minutes <= 10), 1), "%\n")
+    cat("% within 15 min:", round(100 * mean(minutes <= 15), 1), "%\n")
+    cat("% within 20 min:", round(100 * mean(minutes <= 20), 1), "%\n")
+
+    # Low variance warning
+    if (sd(minutes) < 1) {
+      cat("WARNING: Heatmap low variance; try smaller walkCap or finer gridRes.\n")
+    }
+    cat("===========================\n\n")
+
+    # Proper intensity scaling: normalize to [0.05, 1]
+    # Inverse minutes: smaller time = higher intensity (hotter)
+    intensity <- scales::rescale(input$walkCap - minutes, to = c(0.05, 1))
+
     df <- tibble::tibble(
       lon = g_coords[,1],
       lat = g_coords[,2],
-      minutes = as.numeric(minutes)
+      minutes = as.numeric(minutes),
+      intensity = as.numeric(intensity)
     )
-    
-    pal <- colorNumeric("viridis", domain = c(0, input$walkCap))
-    
+
+    # Legend text
+    legend_txt <- paste0(
+      "<div style='background: rgba(255,255,255,0.9); padding: 8px; border-radius: 4px;'>",
+      "<b>Walk time (min)</b><br/>",
+      "Min: ", round(min(minutes), 1), "<br/>",
+      "Median: ", round(median(minutes), 1), "<br/>",
+      "Max: ", round(max(minutes), 1),
+      "</div>"
+    )
+
     leafletProxy("heatmap") |>
       clearMarkers() |>
       clearHeatmap() |>
+      clearControls() |>
       addHeatmap(
-        lng = df$lon, lat = df$lat, intensity = (input$walkCap - df$minutes + 0.01),
-        blur = 25, max = input$walkCap, radius = 18
+        lng = df$lon, lat = df$lat, intensity = df$intensity,
+        blur = 30, max = 1, radius = input$radius
       ) |>
       addCircleMarkers(
         data = stations_rv(), radius = 2, color = "#333333", opacity = 0.8, fillOpacity = 0.8,
-        popup = ~paste0("<b>", htmltools::htmlEscape(name %||% "Station"), "</b><br/>Lines: ", htmltools::htmlEscape(lines_rv()))
-      )
+        popup = ~paste0("<b>", htmltools::htmlEscape(name %||% "Station"), "</b><br/>Lines: ",
+                        htmltools::htmlEscape(paste(lines_rv(), collapse = ", ")))
+      ) |>
+      addControl(html = legend_txt, position = "bottomleft")
   })
   
   # ----------------- Specificity tab -----------------
