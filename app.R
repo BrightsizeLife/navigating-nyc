@@ -88,11 +88,12 @@ fetch_osm_stops_for_lines <- function(lines, force = FALSE) {
   
   q <- overpass_query_for_lines(lines)
   q <- paste(q, collapse = "\n")  # ensure scalar string
-  # Overpass API endpoint (GET with query param)
+  # Overpass API endpoint (GET with query param) with retry
   resp <- request("https://overpass-api.de/api/interpreter") |>
     req_user_agent(APP_USER_AGENT) |>
     req_url_query(data = q) |>
     req_timeout(90) |>
+    req_retry(max_tries = 3, backoff = ~5) |>
     req_perform()
   
   dat <- resp |> resp_body_string() |> fromJSON(simplifyVector = FALSE)
@@ -204,15 +205,15 @@ ui <- page_fluid(
         "lines", "Subway lines (OSM 'ref')", choices = DEFAULT_LINES,
         selected = c("A","C","L"), multiple = TRUE, options = list(plugins = list("remove_button"))
       ),
-      sliderInput("walkCap", "Walk time cap for heatmap (minutes)", min = 3, max = 30, value = 15, step = 1),
-      sliderInput("gridRes", "Heatmap grid resolution (coarser → faster)", min = 0.002, max = 0.01, value = 0.004, step = 0.001),
-      sliderInput("radius", "Heat radius", min = 10, max = 50, value = 25, step = 1),
+      sliderInput("walkCap", "Walk time cap (minutes)", min = 3, max = 30, value = 15, step = 1),
+      sliderInput("gridRes", "Grid resolution (coarser → faster)", min = 0.002, max = 0.01, value = 0.004, step = 0.001),
+      sliderInput("radius", "Circle size", min = 10, max = 50, value = 25, step = 5),
       actionButton("refresh", "Fetch / Refresh Lines", icon = icon("rotate"))
     ),
     card(
       navset_tab(
         nav_panel("Walkability overview",
-            p("Heat map of approximate walk minutes to the nearest station on any selected line."),
+            p("Color-coded map of approximate walk minutes to the nearest station. Dark = near, light = far."),
             leafletOutput("heatmap", height = 600)
         ),
         nav_panel("Address specificity",
@@ -295,37 +296,47 @@ server <- function(input, output, session) {
     }
     cat("===========================\n\n")
 
-    # Proper intensity scaling: normalize to [0.05, 1]
-    # Inverse minutes: smaller time = higher intensity (hotter)
-    intensity <- scales::rescale(input$walkCap - minutes, to = c(0.05, 1))
-
     df <- tibble::tibble(
       lon = g_coords[,1],
       lat = g_coords[,2],
-      minutes = as.numeric(minutes),
-      intensity = as.numeric(intensity)
+      minutes = as.numeric(minutes)
     )
 
-    # Legend text
+    # Color palette: darker = closer (less walk time), lighter = farther
+    # Use magma for better contrast (dark purple -> yellow)
+    pal <- colorNumeric(
+      palette = "magma",
+      domain = c(0, input$walkCap),
+      reverse = TRUE  # Reverse so dark = near, light = far
+    )
+
+    # Legend HTML with color scale
     legend_txt <- paste0(
-      "<div style='background: rgba(255,255,255,0.9); padding: 8px; border-radius: 4px;'>",
+      "<div style='background: rgba(255,255,255,0.95); padding: 10px; border-radius: 4px; font-size: 12px;'>",
       "<b>Walk time (min)</b><br/>",
       "Min: ", round(min(minutes), 1), "<br/>",
       "Median: ", round(median(minutes), 1), "<br/>",
-      "Max: ", round(max(minutes), 1),
+      "Max: ", round(max(minutes), 1), "<br/>",
+      "<span style='color: #000004;'>█</span> Near (0 min)<br/>",
+      "<span style='color: #B63679;'>█</span> Mid<br/>",
+      "<span style='color: #FCFDBF;'>█</span> Far (", input$walkCap, " min)",
       "</div>"
     )
 
     leafletProxy("heatmap") |>
+      clearShapes() |>
       clearMarkers() |>
-      clearHeatmap() |>
       clearControls() |>
-      addHeatmap(
-        lng = df$lon, lat = df$lat, intensity = df$intensity,
-        blur = 30, max = 1, radius = input$radius
+      addCircles(
+        lng = df$lon, lat = df$lat,
+        radius = input$radius * 10,  # Scale radius to meters
+        fillColor = ~pal(minutes),
+        fillOpacity = 0.6,
+        stroke = FALSE
       ) |>
       addCircleMarkers(
-        data = stations_rv(), radius = 2, color = "#333333", opacity = 0.8, fillOpacity = 0.8,
+        data = stations_rv(), radius = 3, color = "#00FFFF", weight = 2,
+        fillColor = "#0080FF", opacity = 1, fillOpacity = 0.9,
         popup = ~paste0("<b>", htmltools::htmlEscape(name %||% "Station"), "</b><br/>Lines: ",
                         htmltools::htmlEscape(paste(lines_rv(), collapse = ", ")))
       ) |>
