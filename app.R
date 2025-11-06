@@ -11,6 +11,7 @@ library(bslib)
 library(leaflet)
 library(leaflet.extras)
 library(sf)
+library(lwgeom)
 library(httr2)
 library(jsonlite)
 library(dplyr)
@@ -47,24 +48,38 @@ bbox_to_overpass <- function(bbox) {
   paste0(bbox[2], ",", bbox[1], ",", bbox[4], ",", bbox[3])
 }
 
-overpass_query_for_lines <- function(lines, bbox = NYC_BBOX) {
+overpass_query_for_lines <- function(lines, bbox = NYC_BBOX, include_tracks = TRUE) {
   # Build an Overpass QL query that fetches route=subway relations
   # whose 'ref' matches any of the selected line letters/numbers,
   # then pulls member nodes with role 'stop'/'platform' (stations).
-  # We also pull 'station' nodes just in case (belt & suspenders).
+  # If include_tracks=TRUE, also fetch way geometries for track polylines.
   ref_regex <- paste(lines, collapse = "|")
   bbox_str <- bbox_to_overpass(bbox)
 
-  q <- sprintf(
-    '[out:json][timeout:60];
+  if (include_tracks) {
+    q <- sprintf(
+      '[out:json][timeout:60];
+rel["route"="subway"]["ref"~"^(%s)$"](%s);
+(
+  node(r:"stop");
+  node(r:"platform");
+  way(r);
+);
+out tags geom;',
+      ref_regex, bbox_str
+    )
+  } else {
+    q <- sprintf(
+      '[out:json][timeout:60];
 rel["route"="subway"]["ref"~"^(%s)$"](%s);
 (
   node(r:"stop");
   node(r:"platform");
 );
 out tags geom;',
-    ref_regex, bbox_str
-  )
+      ref_regex, bbox_str
+    )
+  }
   q
 }
 
@@ -79,13 +94,48 @@ http_get_json <- function(url, query = list()) {
     fromJSON(simplifyVector = FALSE)
 }
 
+# Deduplicate stations within tolerance using geodetic distance
+dedupe_stations <- function(sf_in, tol_m = 35) {
+  if (nrow(sf_in) == 0) return(sf_in)
+
+  # Compute pairwise geodetic distances
+  dists <- st_geod_distance(sf_in)
+
+  # Build clusters: each station goes to the cluster of its nearest neighbor within tolerance
+  cluster_id <- seq_len(nrow(sf_in))
+  merged_count <- rep(1L, nrow(sf_in))
+
+  for (i in seq_len(nrow(sf_in))) {
+    close_idx <- which(dists[i,] < tol_m & dists[i,] > 0)
+    if (length(close_idx) > 0) {
+      # Assign to the minimum cluster ID among close neighbors
+      min_cluster <- min(cluster_id[c(i, close_idx)])
+      cluster_id[c(i, close_idx)] <- min_cluster
+    }
+  }
+
+  # Group by cluster, keep first row, sum merged counts
+  sf_deduped <- sf_in |>
+    mutate(cluster_id = cluster_id) |>
+    group_by(cluster_id) |>
+    summarise(
+      osm_id = first(osm_id),
+      name = first(name),
+      candidate_lines = first(candidate_lines),
+      n_merged = n(),
+      .groups = "drop"
+    )
+
+  sf_deduped
+}
+
 fetch_osm_stops_for_lines <- function(lines, force = FALSE) {
   key <- paste0("cache/overpass_stops_", digest::digest(sort(lines)), ".rds")
   if (file.exists(key) && !force) {
     return(readRDS(key))
   }
-  
-  q <- overpass_query_for_lines(lines)
+
+  q <- overpass_query_for_lines(lines, include_tracks = FALSE)
   q <- paste(q, collapse = "\n")  # ensure scalar string
   # Overpass API endpoint (GET with query param)
   resp <- request("https://overpass-api.de/api/interpreter") |>
@@ -93,44 +143,138 @@ fetch_osm_stops_for_lines <- function(lines, force = FALSE) {
     req_url_query(data = q) |>
     req_timeout(90) |>
     req_perform()
-  
+
   dat <- resp |> resp_body_string() |> fromJSON(simplifyVector = FALSE)
-  
+
   if (is.null(dat$elements) || length(dat$elements) == 0) {
-    return(sf::st_sf(osm_id = character(), name = character(), ref = character(),
+    return(sf::st_sf(osm_id = character(), name = character(),
+                     n_merged = integer(), candidate_lines = character(),
                      geometry = st_sfc(), crs = 4326))
   }
-  
+
   # Convert nodes to sf
   nodes <- purrr::keep(dat$elements, ~ .x$type == "node")
   if (length(nodes) == 0) {
-    return(sf::st_sf(osm_id = character(), name = character(), ref = character(),
+    return(sf::st_sf(osm_id = character(), name = character(),
+                     n_merged = integer(), candidate_lines = character(),
                      geometry = st_sfc(), crs = 4326))
   }
-  
+
   df <- tibble::tibble(
     osm_id = vapply(nodes, function(x) as.character(x$id), character(1)),
     lat = vapply(nodes, function(x) x$lat %||% NA_real_, numeric(1)),
     lon = vapply(nodes, function(x) x$lon %||% NA_real_, numeric(1)),
     name = vapply(nodes, function(x) x$tags$name %||% NA_character_, character(1)),
-    # Overpass returns stop nodes without the route refs; keep name + coords
-    # We'll attach the requested line set as 'candidate_lines' to indicate filter scope
     candidate_lines = paste(sort(lines), collapse = ",")
   ) |>
     tidyr::drop_na(lat, lon)
-  
-  sf <- st_as_sf(df, coords = c("lon","lat"), crs = 4326)
 
-  # Deduplicate close nodes by rounded coordinate (prevents dense duplicates)
-  coords <- st_coordinates(sf)
-  sf <- sf |>
-    mutate(lat_round = round(coords[,2], 5),
-           lon_round = round(coords[,1], 5)) |>
-    distinct(lat_round, lon_round, .keep_all = TRUE) |>
-    select(-lat_round, -lon_round)
-  
+  sf_raw <- st_as_sf(df, coords = c("lon","lat"), crs = 4326)
+  count_before <- nrow(sf_raw)
+
+  # Apply geodetic deduplication
+  sf <- dedupe_stations(sf_raw, tol_m = 35)
+  count_after <- nrow(sf)
+
+  # Log merge statistics
+  cat(sprintf("\n=== Station Deduplication (lines: %s) ===\n", paste(lines, collapse = ", ")))
+  cat(sprintf("  Before: %d stations\n", count_before))
+  cat(sprintf("  After:  %d stations\n", count_after))
+  cat(sprintf("  Merged: %d clusters\n", count_before - count_after))
+
+  # Show merge table for stations that absorbed duplicates
+  merged_tbl <- sf |>
+    filter(n_merged > 1) |>
+    select(name, n_merged) |>
+    st_drop_geometry()
+
+  if (nrow(merged_tbl) > 0) {
+    cat("\nMerged station clusters:\n")
+    # Add example coordinates
+    merged_with_coords <- sf |>
+      filter(n_merged > 1) |>
+      mutate(coords = sprintf("(%.5f, %.5f)",
+                              st_coordinates(geometry)[,1],
+                              st_coordinates(geometry)[,2])) |>
+      select(name, n_merged, coords) |>
+      st_drop_geometry()
+    print(as.data.frame(merged_with_coords), row.names = FALSE)
+  }
+
+  # Save snapshot for diagnostics
+  snapshot <- list(
+    timestamp = format(Sys.time(), "%Y%m%d_%H%M%S"),
+    lines = paste(sort(lines), collapse = ","),
+    count_before = count_before,
+    count_after = count_after,
+    n_clusters_merged = count_before - count_after
+  )
+  snapshot_file <- sprintf("cache/osm_fetch_snapshot_%s.json", snapshot$timestamp)
+  write(toJSON(snapshot, pretty = TRUE, auto_unbox = TRUE), snapshot_file)
+  cat(sprintf("\nSnapshot saved: %s\n\n", snapshot_file))
+
   saveRDS(sf, key)
   sf
+}
+
+fetch_osm_tracks_for_lines <- function(lines, force = FALSE) {
+  key <- paste0("cache/overpass_tracks_", digest::digest(sort(lines)), ".rds")
+  if (file.exists(key) && !force) {
+    return(readRDS(key))
+  }
+
+  q <- overpass_query_for_lines(lines, include_tracks = TRUE)
+  q <- paste(q, collapse = "\n")
+  # Overpass API endpoint
+  resp <- request("https://overpass-api.de/api/interpreter") |>
+    req_user_agent(APP_USER_AGENT) |>
+    req_url_query(data = q) |>
+    req_timeout(90) |>
+    req_perform()
+
+  dat <- resp |> resp_body_string() |> fromJSON(simplifyVector = FALSE)
+
+  if (is.null(dat$elements) || length(dat$elements) == 0) {
+    return(sf::st_sf(osm_id = character(), ref = character(),
+                     geometry = st_sfc(), crs = 4326))
+  }
+
+  # Extract ways (track segments)
+  ways <- purrr::keep(dat$elements, ~ .x$type == "way")
+  if (length(ways) == 0) {
+    return(sf::st_sf(osm_id = character(), ref = character(),
+                     geometry = st_sfc(), crs = 4326))
+  }
+
+  # Parse way geometries into LINESTRING
+  tracks_list <- purrr::map(ways, function(w) {
+    if (is.null(w$geometry) || length(w$geometry) == 0) return(NULL)
+    coords <- do.call(rbind, lapply(w$geometry, function(pt) {
+      c(pt$lon %||% NA, pt$lat %||% NA)
+    }))
+    if (any(is.na(coords))) return(NULL)
+    list(
+      osm_id = as.character(w$id),
+      ref = w$tags$ref %||% NA_character_,
+      geom = st_linestring(coords)
+    )
+  })
+
+  tracks_list <- purrr::compact(tracks_list)
+  if (length(tracks_list) == 0) {
+    return(sf::st_sf(osm_id = character(), ref = character(),
+                     geometry = st_sfc(), crs = 4326))
+  }
+
+  df <- tibble::tibble(
+    osm_id = vapply(tracks_list, function(x) x$osm_id, character(1)),
+    ref = vapply(tracks_list, function(x) x$ref, character(1))
+  )
+  geoms <- st_sfc(lapply(tracks_list, function(x) x$geom), crs = 4326)
+  tracks_sf <- st_sf(df, geometry = geoms)
+
+  saveRDS(tracks_sf, key)
+  tracks_sf
 }
 
 # Haversine distance in meters between two lon/lat points
@@ -203,6 +347,7 @@ ui <- page_fluid(
         "lines", "Subway lines (OSM 'ref')", choices = DEFAULT_LINES,
         selected = c("A","C","L"), multiple = TRUE, options = list(plugins = list("remove_button"))
       ),
+      checkboxInput("showTracks", "Show line tracks", value = TRUE),
       sliderInput("walkCap", "Walk time cap for heatmap (minutes)", min = 3, max = 30, value = 15, step = 1),
       sliderInput("gridRes", "Heatmap grid resolution (coarser → faster)", min = 0.002, max = 0.01, value = 0.004, step = 0.001),
       actionButton("refresh", "Fetch / Refresh Lines", icon = icon("rotate"))
@@ -232,19 +377,27 @@ ui <- page_fluid(
 # -------------------------
 server <- function(input, output, session) {
   lines_rv <- reactiveVal(character())
-  stations_rv <- reactiveVal(st_sf(osm_id = character(), name = character(), geometry = st_sfc(crs = 4326)))
-  
+  stations_rv <- reactiveVal(st_sf(osm_id = character(), name = character(), n_merged = integer(), geometry = st_sfc(crs = 4326)))
+  tracks_rv <- reactiveVal(st_sf(osm_id = character(), ref = character(), geometry = st_sfc(crs = 4326)))
+
   fetch_lines <- function() {
     req(length(input$lines) > 0)
-    showNotification("Fetching stations for selected lines from Overpass…", type = "message", duration = 4)
+    showNotification("Fetching stations & tracks for selected lines from Overpass…", type = "message", duration = 4)
     sf_pts <- fetch_osm_stops_for_lines(input$lines)
     if (nrow(sf_pts) == 0) {
       showNotification("No stations found for those lines (OSM). Try different lines.", type = "error", duration = 5)
     }
     stations_rv(sf_pts)
+
+    # Fetch track geometries if checkbox is enabled
+    if (input$showTracks) {
+      sf_tracks <- fetch_osm_tracks_for_lines(input$lines)
+      tracks_rv(sf_tracks)
+    }
+
     lines_rv(input$lines)
   }
-  
+
   observeEvent(input$refresh, fetch_lines(), ignoreInit = FALSE)
   
   # ----------------- Heatmap tab -----------------
@@ -259,33 +412,70 @@ server <- function(input, output, session) {
     grid <- make_grid_points(NYC_BBOX, step_deg = input$gridRes)
     s_coords <- st_coordinates(stations_rv())
     g_coords <- st_coordinates(grid)
-    
+
     # For each grid point, compute distance to nearest station
     # (vectorized via apply over stations; quick-and-dirty MVP)
     nearest_m <- sapply(seq_len(nrow(g_coords)), function(i) {
       d <- haversine_m(g_coords[i,1], g_coords[i,2], s_coords[,1], s_coords[,2])
       min(d)
     })
-    
+
     minutes <- pmin(approx_walk_minutes(nearest_m), input$walkCap)
     df <- tibble::tibble(
       lon = g_coords[,1],
       lat = g_coords[,2],
       minutes = as.numeric(minutes)
     )
-    
+
     pal <- colorNumeric("viridis", domain = c(0, input$walkCap))
-    
-    leafletProxy("heatmap") |>
+
+    # Build station popup with merge count if > 1
+    stns <- stations_rv()
+    stns <- stns |>
+      mutate(popup_text = pmap_chr(list(name, n_merged), function(n, nm) {
+        base_text <- paste0("<b>", htmltools::htmlEscape(n %||% "Station"), "</b>")
+        if (!is.na(nm) && nm > 1) {
+          base_text <- paste0(base_text, "<br/><i>(merged ", nm, " duplicates)</i>")
+        }
+        base_text
+      }))
+
+    # Start with heatmap and stations
+    proxy <- leafletProxy("heatmap") |>
       clearMarkers() |>
+      clearShapes() |>
       clearHeatmap() |>
       addHeatmap(
         lng = df$lon, lat = df$lat, intensity = (input$walkCap - df$minutes + 0.01),
         blur = 25, max = input$walkCap, radius = 18
-      ) |>
+      )
+
+    # Add track polylines if enabled and available
+    if (input$showTracks && nrow(tracks_rv()) > 0) {
+      # Color tracks by ref (fallback to single color)
+      tracks <- tracks_rv()
+      # Simple color mapping for common NYC lines
+      line_colors <- c(A = "#0039A6", C = "#0039A6", E = "#0039A6",
+                       B = "#FF6319", D = "#FF6319", F = "#FF6319", M = "#FF6319",
+                       G = "#6CBE45", L = "#A7A9AC", J = "#996633", Z = "#996633",
+                       N = "#FCCC0A", Q = "#FCCC0A", R = "#FCCC0A", W = "#FCCC0A",
+                       `1` = "#EE352E", `2` = "#EE352E", `3` = "#EE352E",
+                       `4` = "#00933C", `5` = "#00933C", `6` = "#00933C",
+                       `7` = "#B933AD", S = "#808183")
+
+      tracks <- tracks |>
+        mutate(color = ifelse(!is.na(ref) & ref %in% names(line_colors),
+                              line_colors[ref], "#555555"))
+
+      proxy <- proxy |>
+        addPolylines(data = tracks, color = ~color, weight = 1.5, opacity = 0.7)
+    }
+
+    # Add station markers (small dark dots)
+    proxy |>
       addCircleMarkers(
-        data = stations_rv(), radius = 2, color = "#333333", opacity = 0.8, fillOpacity = 0.8,
-        popup = ~paste0("<b>", htmltools::htmlEscape(name %||% "Station"), "</b><br/>Lines: ", htmltools::htmlEscape(lines_rv()))
+        data = stns, radius = 3, color = "#222222", opacity = 0.9, fillOpacity = 0.9,
+        popup = ~popup_text
       )
   })
   
