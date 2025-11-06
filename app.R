@@ -206,14 +206,19 @@ ui <- page_fluid(
         selected = c("A","C","L"), multiple = TRUE, options = list(plugins = list("remove_button"))
       ),
       sliderInput("walkCap", "Walk time cap (minutes)", min = 3, max = 30, value = 15, step = 1),
-      sliderInput("gridRes", "Grid resolution (coarser → faster)", min = 0.002, max = 0.01, value = 0.004, step = 0.001),
-      sliderInput("radius", "Circle size", min = 10, max = 50, value = 25, step = 5),
+      div(
+        sliderInput("gridRes", "Fidelity", min = 0.002, max = 0.01, value = 0.004, step = 0.001),
+        style = "position: relative;",
+        tags$div(style = "display: flex; justify-content: space-between; margin-top: -10px; font-size: 11px; color: #666;",
+                 tags$span("High (slower)"),
+                 tags$span("Low (faster)"))
+      ),
       actionButton("refresh", "Fetch / Refresh Lines", icon = icon("rotate"))
     ),
     card(
       navset_tab(
         nav_panel("Walkability overview",
-            p("Color-coded map of approximate walk minutes to the nearest station. Dark = near, light = far."),
+            p("Continuous raster showing walk time to nearest station. Dark purple = close, bright yellow = far. Areas beyond the walk cap are transparent."),
             leafletOutput("heatmap", height = 600)
         ),
         nav_panel("Address specificity",
@@ -296,22 +301,32 @@ server <- function(input, output, session) {
     }
     cat("===========================\n\n")
 
+    # Calculate grid cell boundaries for continuous raster effect
+    half_step <- input$gridRes / 2
     df <- tibble::tibble(
       lon = g_coords[,1],
       lat = g_coords[,2],
-      minutes = as.numeric(minutes)
+      minutes = as.numeric(minutes),
+      lng1 = lon - half_step,
+      lat1 = lat - half_step,
+      lng2 = lon + half_step,
+      lat2 = lat + half_step
     )
 
-    # Color palette: darker = closer (less walk time), lighter = farther
-    # Use magma for better contrast (dark purple -> yellow)
+    # Color palette: dark = near (low minutes), light = far (high minutes)
+    # Magma: dark purple (low) → bright yellow (high)
     pal <- colorNumeric(
       palette = "magma",
       domain = c(0, input$walkCap),
-      reverse = TRUE  # Reverse so dark = near, light = far
+      reverse = FALSE  # Don't reverse: dark=near, light=far
     )
 
-    # Pre-compute colors for each grid point
+    # Pre-compute colors for each grid cell
     df$color <- pal(df$minutes)
+
+    # Make cells at walkCap transparent (outside walk zone)
+    # For cells within zone: use transparency so streets show through
+    df$opacity <- ifelse(df$minutes >= input$walkCap, 0, 0.4)
 
     # Legend HTML with color scale
     legend_txt <- paste0(
@@ -320,22 +335,24 @@ server <- function(input, output, session) {
       "Min: ", round(min(minutes), 1), "<br/>",
       "Median: ", round(median(minutes), 1), "<br/>",
       "Max: ", round(max(minutes), 1), "<br/>",
-      "<span style='color: #000004;'>█</span> Near (0 min)<br/>",
-      "<span style='color: #B63679;'>█</span> Mid<br/>",
-      "<span style='color: #FCFDBF;'>█</span> Far (", input$walkCap, " min)",
-      "</div>"
+      "<div style='margin-top: 5px;'>",
+      "<span style='background: #000004; padding: 2px 8px; color: white;'>█</span> Near (0 min)<br/>",
+      "<span style='background: #B63679; padding: 2px 8px; color: white;'>█</span> Mid<br/>",
+      "<span style='background: #FCFDBF; padding: 2px 8px;'>█</span> Far (", input$walkCap, " min)",
+      "</div></div>"
     )
 
     leafletProxy("heatmap") |>
       clearShapes() |>
       clearMarkers() |>
       clearControls() |>
-      addCircles(
-        lng = df$lon, lat = df$lat,
-        radius = input$radius * 10,  # Scale radius to meters
+      addRectangles(
+        lng1 = df$lng1, lat1 = df$lat1,
+        lng2 = df$lng2, lat2 = df$lat2,
         fillColor = df$color,
-        fillOpacity = 0.6,
-        stroke = FALSE
+        fillOpacity = df$opacity,
+        stroke = FALSE,
+        weight = 0
       ) |>
       addCircleMarkers(
         data = stations_rv(), radius = 3, color = "#00FFFF", weight = 2,
