@@ -17,6 +17,7 @@ library(dplyr)
 library(purrr)
 library(tidyr)
 library(stringr)
+library(scales)
 
 options(scipen = 999)
 dir.create("cache", showWarnings = FALSE)
@@ -87,11 +88,12 @@ fetch_osm_stops_for_lines <- function(lines, force = FALSE) {
   
   q <- overpass_query_for_lines(lines)
   q <- paste(q, collapse = "\n")  # ensure scalar string
-  # Overpass API endpoint (GET with query param)
+  # Overpass API endpoint (GET with query param) with retry
   resp <- request("https://overpass-api.de/api/interpreter") |>
     req_user_agent(APP_USER_AGENT) |>
     req_url_query(data = q) |>
     req_timeout(90) |>
+    req_retry(max_tries = 3, backoff = ~5) |>
     req_perform()
   
   dat <- resp |> resp_body_string() |> fromJSON(simplifyVector = FALSE)
@@ -203,14 +205,20 @@ ui <- page_fluid(
         "lines", "Subway lines (OSM 'ref')", choices = DEFAULT_LINES,
         selected = c("A","C","L"), multiple = TRUE, options = list(plugins = list("remove_button"))
       ),
-      sliderInput("walkCap", "Walk time cap for heatmap (minutes)", min = 3, max = 30, value = 15, step = 1),
-      sliderInput("gridRes", "Heatmap grid resolution (coarser → faster)", min = 0.002, max = 0.01, value = 0.004, step = 0.001),
+      sliderInput("walkCap", "Walk time cap (minutes)", min = 3, max = 30, value = 15, step = 1),
+      div(
+        sliderInput("gridRes", "Fidelity", min = 0.002, max = 0.01, value = 0.004, step = 0.001),
+        style = "position: relative;",
+        tags$div(style = "display: flex; justify-content: space-between; margin-top: -10px; font-size: 11px; color: #666;",
+                 tags$span("High (slower)"),
+                 tags$span("Low (faster)"))
+      ),
       actionButton("refresh", "Fetch / Refresh Lines", icon = icon("rotate"))
     ),
     card(
       navset_tab(
         nav_panel("Walkability overview",
-            p("Heat map of approximate walk minutes to the nearest station on any selected line."),
+            p("Continuous raster showing walk time to nearest station. Dark purple = close, bright yellow = far. Areas beyond the walk cap are transparent."),
             leafletOutput("heatmap", height = 600)
         ),
         nav_panel("Address specificity",
@@ -255,38 +263,104 @@ server <- function(input, output, session) {
   })
   
   observe({
-    req(nrow(stations_rv()) > 0)
+    req(nrow(stations_rv()) > 0L)
+
     grid <- make_grid_points(NYC_BBOX, step_deg = input$gridRes)
+
+    # Guardrail: prevent UI freeze on huge grids
+    if (nrow(grid) > 30000) {
+      showNotification("Grid too large (>30k points); increase gridRes to avoid freeze.",
+                       type = "warning", duration = 6)
+      return()
+    }
+
     s_coords <- st_coordinates(stations_rv())
     g_coords <- st_coordinates(grid)
-    
+
     # For each grid point, compute distance to nearest station
-    # (vectorized via apply over stations; quick-and-dirty MVP)
     nearest_m <- sapply(seq_len(nrow(g_coords)), function(i) {
       d <- haversine_m(g_coords[i,1], g_coords[i,2], s_coords[,1], s_coords[,2])
       min(d)
     })
-    
+
     minutes <- pmin(approx_walk_minutes(nearest_m), input$walkCap)
+
+    # Console diagnostics
+    cat("\n=== Heatmap diagnostics ===\n")
+    cat("Grid points:", nrow(grid), "\n")
+    print(summary(minutes))
+    cat("SD:", round(sd(minutes), 2), "\n")
+    cat("% within 5 min:", round(100 * mean(minutes <= 5), 1), "%\n")
+    cat("% within 10 min:", round(100 * mean(minutes <= 10), 1), "%\n")
+    cat("% within 15 min:", round(100 * mean(minutes <= 15), 1), "%\n")
+    cat("% within 20 min:", round(100 * mean(minutes <= 20), 1), "%\n")
+
+    # Low variance warning
+    if (sd(minutes) < 1) {
+      cat("WARNING: Heatmap low variance; try smaller walkCap or finer gridRes.\n")
+    }
+    cat("===========================\n\n")
+
+    # Calculate grid cell boundaries for continuous raster effect
+    half_step <- input$gridRes / 2
     df <- tibble::tibble(
       lon = g_coords[,1],
       lat = g_coords[,2],
-      minutes = as.numeric(minutes)
+      minutes = as.numeric(minutes),
+      lng1 = lon - half_step,
+      lat1 = lat - half_step,
+      lng2 = lon + half_step,
+      lat2 = lat + half_step
     )
-    
-    pal <- colorNumeric("viridis", domain = c(0, input$walkCap))
-    
+
+    # Color palette: dark = near (low minutes), light = far (high minutes)
+    # Magma: dark purple (low) → bright yellow (high)
+    pal <- colorNumeric(
+      palette = "magma",
+      domain = c(0, input$walkCap),
+      reverse = FALSE  # Don't reverse: dark=near, light=far
+    )
+
+    # Pre-compute colors for each grid cell
+    df$color <- pal(df$minutes)
+
+    # Make cells at walkCap transparent (outside walk zone)
+    # For cells within zone: use transparency so streets show through
+    df$opacity <- ifelse(df$minutes >= input$walkCap, 0, 0.4)
+
+    # Legend HTML with color scale
+    legend_txt <- paste0(
+      "<div style='background: rgba(255,255,255,0.95); padding: 10px; border-radius: 4px; font-size: 12px;'>",
+      "<b>Walk time (min)</b><br/>",
+      "Min: ", round(min(minutes), 1), "<br/>",
+      "Median: ", round(median(minutes), 1), "<br/>",
+      "Max: ", round(max(minutes), 1), "<br/>",
+      "<div style='margin-top: 5px;'>",
+      "<span style='background: #000004; padding: 2px 8px; color: white;'>█</span> Near (0 min)<br/>",
+      "<span style='background: #B63679; padding: 2px 8px; color: white;'>█</span> Mid<br/>",
+      "<span style='background: #FCFDBF; padding: 2px 8px;'>█</span> Far (", input$walkCap, " min)",
+      "</div></div>"
+    )
+
     leafletProxy("heatmap") |>
+      clearShapes() |>
       clearMarkers() |>
-      clearHeatmap() |>
-      addHeatmap(
-        lng = df$lon, lat = df$lat, intensity = (input$walkCap - df$minutes + 0.01),
-        blur = 25, max = input$walkCap, radius = 18
+      clearControls() |>
+      addRectangles(
+        lng1 = df$lng1, lat1 = df$lat1,
+        lng2 = df$lng2, lat2 = df$lat2,
+        fillColor = df$color,
+        fillOpacity = df$opacity,
+        stroke = FALSE,
+        weight = 0
       ) |>
       addCircleMarkers(
-        data = stations_rv(), radius = 2, color = "#333333", opacity = 0.8, fillOpacity = 0.8,
-        popup = ~paste0("<b>", htmltools::htmlEscape(name %||% "Station"), "</b><br/>Lines: ", htmltools::htmlEscape(lines_rv()))
-      )
+        data = stations_rv(), radius = 3, color = "#00FFFF", weight = 2,
+        fillColor = "#0080FF", opacity = 1, fillOpacity = 0.9,
+        popup = ~paste0("<b>", htmltools::htmlEscape(name %||% "Station"), "</b><br/>Lines: ",
+                        htmltools::htmlEscape(paste(lines_rv(), collapse = ", ")))
+      ) |>
+      addControl(html = legend_txt, position = "bottomleft")
   })
   
   # ----------------- Specificity tab -----------------
