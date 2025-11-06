@@ -123,14 +123,6 @@ fetch_osm_stops_for_lines <- function(lines, force = FALSE) {
   
   sf <- st_as_sf(df, coords = c("lon","lat"), crs = 4326)
 
-  # Deduplicate close nodes by rounded coordinate (prevents dense duplicates)
-  coords <- st_coordinates(sf)
-  sf <- sf |>
-    mutate(lat_round = round(coords[,2], 5),
-           lon_round = round(coords[,1], 5)) |>
-    distinct(lat_round, lon_round, .keep_all = TRUE) |>
-    select(-lat_round, -lon_round)
-  
   saveRDS(sf, key)
   sf
 }
