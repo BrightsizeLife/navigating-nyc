@@ -18,6 +18,7 @@ library(purrr)
 library(tidyr)
 library(stringr)
 library(scales)
+library(DT)
 
 options(scipen = 999)
 dir.create("cache", showWarnings = FALSE)
@@ -229,6 +230,11 @@ ui <- page_fluid(
             leafletOutput("specific", height = 600),
             br(),
             tableOutput("nearest_tbl")
+        ),
+        nav_panel("Station Table",
+            p("Browse all fetched stations with coordinates and reference lines. Click 'Fetch / Refresh Lines' to load stations."),
+            br(),
+            DTOutput("station_table")
         )
       )
     )
@@ -409,6 +415,35 @@ server <- function(input, output, session) {
     leaflet(options = leafletOptions(zoomControl = TRUE, preferCanvas = TRUE)) |>
       addProviderTiles("CartoDB.Positron") |>
       setView(lng = -73.9851, lat = 40.758, zoom = 12)
+  })
+
+  # ----------------- Station Table tab -----------------
+  output$station_table <- renderDT({
+    stns <- stations_rv()
+    req(nrow(stns) > 0)
+
+    # Extract coordinates and build display table
+    coords <- st_coordinates(stns)
+    tbl_data <- tibble::tibble(
+      Name = stns$name %||% "Unknown",
+      Lines = stns$candidate_lines %||% "",
+      Longitude = round(coords[,1], 5),
+      Latitude = round(coords[,2], 5),
+      OSM_ID = stns$osm_id
+    )
+
+    datatable(
+      tbl_data,
+      options = list(
+        pageLength = 25,
+        lengthMenu = c(10, 25, 50, 100),
+        order = list(list(0, 'asc')),  # Sort by name
+        scrollX = TRUE
+      ),
+      rownames = FALSE,
+      filter = "top",
+      class = "display compact stripe"
+    )
   })
 }
 
