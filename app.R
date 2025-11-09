@@ -50,20 +50,15 @@ bbox_to_overpass <- function(bbox) {
 }
 
 overpass_query_for_lines <- function(lines, bbox = NYC_BBOX) {
-  # Build an Overpass QL query that fetches route=subway relations
-  # whose 'ref' matches any of the selected line letters/numbers,
-  # then pulls member nodes with role 'stop'/'platform' (stations).
-  # We also pull 'station' nodes just in case (belt & suspenders).
+  # Fetch route=subway relations AND their members
+  # This allows us to determine which lines serve which stations
   ref_regex <- paste(lines, collapse = "|")
   bbox_str <- bbox_to_overpass(bbox)
 
   q <- sprintf(
     '[out:json][timeout:60];
 rel["route"="subway"]["ref"~"^(%s)$"](%s);
-(
-  node(r:"stop");
-  node(r:"platform");
-);
+(._; >;);
 out tags geom;',
     ref_regex, bbox_str
   )
@@ -86,52 +81,78 @@ fetch_osm_stops_for_lines <- function(lines, force = FALSE) {
   if (file.exists(key) && !force) {
     return(readRDS(key))
   }
-  
+
   q <- overpass_query_for_lines(lines)
-  q <- paste(q, collapse = "\n")  # ensure scalar string
-  # Overpass API endpoint (GET with query param) with retry
+  q <- paste(q, collapse = "\n")
   resp <- request("https://overpass-api.de/api/interpreter") |>
     req_user_agent(APP_USER_AGENT) |>
     req_url_query(data = q) |>
     req_timeout(90) |>
     req_retry(max_tries = 3, backoff = ~5) |>
     req_perform()
-  
+
   dat <- resp |> resp_body_string() |> fromJSON(simplifyVector = FALSE)
-  
+
   if (is.null(dat$elements) || length(dat$elements) == 0) {
-    return(sf::st_sf(osm_id = character(), name = character(), ref = character(),
-                     geometry = st_sfc(), crs = 4326))
+    return(sf::st_sf(osm_id = character(), name = character(), lines = character(),
+                     candidate_lines = character(), geometry = st_sfc(), crs = 4326))
   }
-  
-  # Convert nodes to sf
+
+  # Parse relations and build node→lines mapping
+  rels <- purrr::keep(dat$elements, ~ .x$type == "relation")
   nodes <- purrr::keep(dat$elements, ~ .x$type == "node")
+
   if (length(nodes) == 0) {
-    return(sf::st_sf(osm_id = character(), name = character(), ref = character(),
-                     geometry = st_sfc(), crs = 4326))
+    return(sf::st_sf(osm_id = character(), name = character(), lines = character(),
+                     candidate_lines = character(), geometry = st_sfc(), crs = 4326))
   }
-  
+
+  # Build node→lines mapping from relation membership
+  node_lines <- new.env(parent = emptyenv())
+  for (r in rels) {
+    ref <- r$tags$ref
+    if (is.null(ref) || !nzchar(ref)) next
+
+    members <- r$members %||% list()
+    for (m in members) {
+      if (!identical(m$type, "node")) next
+      role <- m$role %||% ""
+      if (!role %in% c("stop", "platform", "stop_entry_only", "stop_exit_only", "")) next
+
+      k <- as.character(m$ref)
+      existing <- get0(k, node_lines, inherits = FALSE, ifnotfound = character(0))
+      assign(k, unique(c(existing, ref)), envir = node_lines)
+    }
+  }
+
+  # Build station data with true lines served
   df <- tibble::tibble(
     osm_id = vapply(nodes, function(x) as.character(x$id), character(1)),
     lat = vapply(nodes, function(x) x$lat %||% NA_real_, numeric(1)),
     lon = vapply(nodes, function(x) x$lon %||% NA_real_, numeric(1)),
-    name = vapply(nodes, function(x) x$tags$name %||% NA_character_, character(1)),
-    # Overpass returns stop nodes without the route refs; keep name + coords
-    # We'll attach the requested line set as 'candidate_lines' to indicate filter scope
-    candidate_lines = paste(sort(lines), collapse = ",")
+    name = vapply(nodes, function(x) x$tags$name %||% NA_character_, character(1))
   ) |>
     tidyr::drop_na(lat, lon)
-  
+
+  # Attach true lines served from relation membership
+  df$lines <- vapply(df$osm_id, function(id) {
+    served_lines <- node_lines[[id]] %||% character(0)
+    if (length(served_lines) == 0) "" else paste(sort(served_lines), collapse = ",")
+  }, character(1))
+
+  # Also keep candidate_lines for reference
+  df$candidate_lines <- paste(sort(lines), collapse = ",")
+
   sf <- st_as_sf(df, coords = c("lon","lat"), crs = 4326)
 
-  # Deduplicate close nodes by rounded coordinate (prevents dense duplicates)
+  # Deduplicate close nodes by rounded coordinate
   coords <- st_coordinates(sf)
   sf <- sf |>
     mutate(lat_round = round(coords[,2], 5),
            lon_round = round(coords[,1], 5)) |>
     distinct(lat_round, lon_round, .keep_all = TRUE) |>
     select(-lat_round, -lon_round)
-  
+
   saveRDS(sf, key)
   sf
 }
@@ -246,7 +267,8 @@ ui <- page_fluid(
 # -------------------------
 server <- function(input, output, session) {
   lines_rv <- reactiveVal(character())
-  stations_rv <- reactiveVal(st_sf(osm_id = character(), name = character(), geometry = st_sfc(crs = 4326)))
+  stations_rv <- reactiveVal(st_sf(osm_id = character(), name = character(), lines = character(),
+                                   candidate_lines = character(), geometry = st_sfc(crs = 4326)))
   
   fetch_lines <- function() {
     req(length(input$lines) > 0)
@@ -364,7 +386,7 @@ server <- function(input, output, session) {
         data = stations_rv(), radius = 3, color = "#00FFFF", weight = 2,
         fillColor = "#0080FF", opacity = 1, fillOpacity = 0.9,
         popup = ~paste0("<b>", htmltools::htmlEscape(name %||% "Station"), "</b><br/>Lines: ",
-                        htmltools::htmlEscape(paste(lines_rv(), collapse = ", ")))
+                        htmltools::htmlEscape(lines %||% ""))
       ) |>
       addControl(html = legend_txt, position = "bottomleft")
   })
@@ -426,7 +448,7 @@ server <- function(input, output, session) {
     coords <- st_coordinates(stns)
     tbl_data <- tibble::tibble(
       Name = stns$name %||% "Unknown",
-      Lines = stns$candidate_lines %||% "",
+      Lines = stns$lines %||% "",  # True lines served from OSM relations
       Longitude = round(coords[,1], 5),
       Latitude = round(coords[,2], 5),
       OSM_ID = stns$osm_id
