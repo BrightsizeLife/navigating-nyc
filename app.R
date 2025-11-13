@@ -189,6 +189,30 @@ nearest_n_stations <- function(pt_sf, stations_sf, n = 5) {
   )
 }
 
+stations_within_walk_time <- function(pt_sf, stations_sf, max_walk_min = 15) {
+  if (nrow(stations_sf) == 0) return(tibble::tibble())
+  pt <- st_coordinates(pt_sf)[1,]
+  s_coords <- st_coordinates(stations_sf)
+  d_m <- haversine_m(pt[1], pt[2], s_coords[,1], s_coords[,2])
+  walk_min <- approx_walk_minutes(d_m)
+
+  # Filter to stations within walk time threshold
+  ix <- which(walk_min <= max_walk_min)
+  if (length(ix) == 0) return(tibble::tibble())
+
+  # Sort by distance
+  ix <- ix[order(d_m[ix])]
+
+  tibble::tibble(
+    name = stations_sf$name[ix] %||% NA_character_,
+    lines = stations_sf$candidate_lines[ix] %||% NA_character_,
+    lon = s_coords[ix,1],
+    lat = s_coords[ix,2],
+    distance_m = d_m[ix],
+    walk_min = round(walk_min[ix], 1)
+  )
+}
+
 # -------------------------
 # UI
 # -------------------------
@@ -222,8 +246,9 @@ ui <- page_fluid(
             leafletOutput("heatmap", height = 600)
         ),
         nav_panel("Address specificity",
-            p("Enter an address; see the 5 nearest stations (by selected lines) and walking times."),
+            p("Enter an address to find all nearby subway stations within your preferred walking time."),
             textInput("addr", "Address (NYC)", placeholder = "e.g., 1 Centre St, New York, NY"),
+            sliderInput("addrWalkCap", "Maximum walk time (minutes)", min = 3, max = 30, value = 15, step = 1),
             actionButton("geocode", "Find stations", icon = icon("magnifying-glass")),
             br(), br(),
             leafletOutput("specific", height = 600),
@@ -241,7 +266,8 @@ ui <- page_fluid(
 server <- function(input, output, session) {
   lines_rv <- reactiveVal(character())
   stations_rv <- reactiveVal(st_sf(osm_id = character(), name = character(), geometry = st_sfc(crs = 4326)))
-  
+  all_stations_rv <- reactiveVal(NULL)  # For address specificity: all NYC stations
+
   fetch_lines <- function() {
     req(length(input$lines) > 0)
     showNotification("Fetching stations for selected lines from Overpass…", type = "message", duration = 4)
@@ -252,7 +278,19 @@ server <- function(input, output, session) {
     stations_rv(sf_pts)
     lines_rv(input$lines)
   }
-  
+
+  fetch_all_stations <- function() {
+    # Fetch all NYC subway stations (all default lines)
+    showNotification("Fetching all NYC subway stations…", type = "message", duration = 3)
+    sf_all <- fetch_osm_stops_for_lines(DEFAULT_LINES)
+    if (nrow(sf_all) == 0) {
+      showNotification("Unable to fetch stations from OSM.", type = "error", duration = 5)
+      return(NULL)
+    }
+    all_stations_rv(sf_all)
+    sf_all
+  }
+
   observeEvent(input$refresh, fetch_lines(), ignoreInit = FALSE)
   
   # ----------------- Heatmap tab -----------------
@@ -366,43 +404,67 @@ server <- function(input, output, session) {
   # ----------------- Specificity tab -----------------
   observeEvent(input$geocode, {
     req(input$addr, nchar(input$addr) > 3)
-    # Geocode
+
+    # Geocode the address
     geo <- geocode_nominatim(input$addr)
     if (is.null(geo)) {
       showNotification("Address not found via Nominatim.", type = "error", duration = 5)
       return()
     }
     pt <- st_as_sf(geo, coords = c("lon","lat"), crs = 4326)
-    stns <- stations_rv()
-    if (nrow(stns) == 0) {
-      showNotification("No stations loaded yet. Click 'Fetch / Refresh Lines' first.", type = "warning", duration = 6)
-      return()
+
+    # Fetch all stations if not already loaded
+    stns <- all_stations_rv()
+    if (is.null(stns)) {
+      stns <- fetch_all_stations()
+      if (is.null(stns)) return()
     }
-    tbl <- nearest_n_stations(pt, stns, n = 5)
+
+    # Find stations within walk time threshold
+    tbl <- stations_within_walk_time(pt, stns, max_walk_min = input$addrWalkCap)
+
+    if (nrow(tbl) == 0) {
+      showNotification(
+        paste0("No stations found within ", input$addrWalkCap, " minute walk. Try increasing the walk time."),
+        type = "warning", duration = 5
+      )
+    }
+
     output$nearest_tbl <- renderTable({
       if (nrow(tbl) == 0) return(NULL)
       tibble::tibble(
         Station = tbl$name %||% "Unknown",
+        Lines = tbl$lines %||% "",
         `Walk (min)` = tbl$walk_min,
-        `Distance (m)` = round(tbl$distance_m),
-        Lon = round(tbl$lon, 5),
-        Lat = round(tbl$lat, 5)
+        `Distance (m)` = round(tbl$distance_m)
       )
     })
-    
+
     # Map
-    leafletProxy("specific") |>
-      clearMarkers() |>
-      clearShapes() |>
-      addProviderTiles("CartoDB.Positron") |>
-      fitBounds(min(tbl$lon, geo$lon), min(tbl$lat, geo$lat),
-                max(tbl$lon, geo$lon), max(tbl$lat, geo$lat)) |>
-      addAwesomeMarkers(lng = geo$lon, lat = geo$lat, icon = awesomeIcons(icon = "home", markerColor = "blue"),
-                        popup = htmltools::HTML(paste0("<b>Address</b><br/>", htmltools::htmlEscape(geo$display_name)))) |>
-      addCircleMarkers(data = st_as_sf(tbl, coords = c("lon","lat"), crs = 4326),
-                       radius = 6, color = "#2A9D8F", fillOpacity = 0.9,
-                       popup = ~paste0("<b>", htmltools::htmlEscape(name %||% "Station"), "</b><br/>Walk: ",
-                                       htmltools::htmlEscape(as.character(walk_min %||% NA)), " min"))
+    if (nrow(tbl) > 0) {
+      leafletProxy("specific") |>
+        clearMarkers() |>
+        clearShapes() |>
+        addProviderTiles("CartoDB.Positron") |>
+        fitBounds(min(tbl$lon, geo$lon), min(tbl$lat, geo$lat),
+                  max(tbl$lon, geo$lon), max(tbl$lat, geo$lat)) |>
+        addAwesomeMarkers(lng = geo$lon, lat = geo$lat, icon = awesomeIcons(icon = "home", markerColor = "blue"),
+                          popup = htmltools::HTML(paste0("<b>Address</b><br/>", htmltools::htmlEscape(geo$display_name)))) |>
+        addCircleMarkers(data = st_as_sf(tbl, coords = c("lon","lat"), crs = 4326),
+                         radius = 6, color = "#2A9D8F", fillOpacity = 0.9,
+                         popup = ~paste0("<b>", htmltools::htmlEscape(name %||% "Station"), "</b><br/>",
+                                         "Lines: ", htmltools::htmlEscape(lines %||% ""), "<br/>",
+                                         "Walk: ", htmltools::htmlEscape(as.character(walk_min %||% NA)), " min"))
+    } else {
+      # Just show the address marker if no stations found
+      leafletProxy("specific") |>
+        clearMarkers() |>
+        clearShapes() |>
+        addProviderTiles("CartoDB.Positron") |>
+        setView(lng = geo$lon, lat = geo$lat, zoom = 13) |>
+        addAwesomeMarkers(lng = geo$lon, lat = geo$lat, icon = awesomeIcons(icon = "home", markerColor = "blue"),
+                          popup = htmltools::HTML(paste0("<b>Address</b><br/>", htmltools::htmlEscape(geo$display_name))))
+    }
   }, ignoreInit = TRUE)
   
   output$specific <- renderLeaflet({
