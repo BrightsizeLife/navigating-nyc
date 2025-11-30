@@ -274,16 +274,25 @@ ui <- page_fluid(
       h4("NYC Walkability (Free-API MVP)"),
       p("Pick subway lines and explore walkability by foot. Data from OpenStreetMap/Overpass + Nominatim."),
       hr(),
-      h5("Common controls"),
+      h5("Step 1: Select Lines & Fetch Data"),
       selectizeInput(
         "lines", "Subway lines (OSM 'ref')", choices = DEFAULT_LINES,
         selected = c("A","C","L"), multiple = TRUE, options = list(plugins = list("remove_button"))
       ),
-      textInput("addr", "Address (optional)", placeholder = "e.g., Times Square, New York, NY"),
-      p(style = "font-size: 11px; color: #666; margin-top: -10px;",
-        "Enter address to find nearest stations"),
+      actionButton("refresh", "Fetch / Refresh Lines", icon = icon("rotate"),
+                   style = "width: 100%; margin-bottom: 15px;"),
+      hr(),
+      h5("Step 2: Find Nearest Stations (optional)"),
+      p(style = "font-size: 11px; color: #666;",
+        "Click a test button below, OR type an address and click 'Find Nearest Stations'."),
       actionButton("test_times_sq", "Test: Times Square", style = "font-size: 11px; padding: 3px 8px;"),
       actionButton("test_chelsea", "Test: Chelsea Market", style = "font-size: 11px; padding: 3px 8px; margin-left: 5px;"),
+      br(), br(),
+      textInput("addr", "Or enter custom address", placeholder = "e.g., Times Square, New York, NY"),
+      actionButton("geocode", "Find Nearest Stations", icon = icon("magnifying-glass"),
+                   style = "width: 100%; margin-top: 5px;"),
+      hr(),
+      h5("Visualization Controls"),
       sliderInput("walkCap", "Walk time cap (minutes)", min = 3, max = 30, value = 15, step = 1),
       div(
         sliderInput("gridRes", "Fidelity", min = 0.002, max = 0.01, value = 0.004, step = 0.001),
@@ -291,11 +300,7 @@ ui <- page_fluid(
         tags$div(style = "display: flex; justify-content: space-between; margin-top: -10px; font-size: 11px; color: #666;",
                  tags$span("High (slower)"),
                  tags$span("Low (faster)"))
-      ),
-      actionButton("refresh", "Fetch / Refresh Lines", icon = icon("rotate")),
-      hr(),
-      actionButton("geocode", "Find Nearest Stations", icon = icon("magnifying-glass"),
-                   style = "width: 100%; margin-top: 10px;")
+      )
     ),
     card(
       navset_tab(
@@ -340,7 +345,7 @@ server <- function(input, output, session) {
     lines_rv(input$lines)
   }
   
-  observeEvent(input$refresh, fetch_lines(), ignoreInit = FALSE)
+  observeEvent(input$refresh, fetch_lines())
   
   # ----------------- Heatmap tab -----------------
   output$heatmap <- renderLeaflet({
@@ -496,9 +501,6 @@ server <- function(input, output, session) {
     })
 
     if (is.null(geo)) {
-      if (!grepl("403", as.character(sys.calls()))) {
-        showNotification("Address not found via Nominatim.", type = "error", duration = 5)
-      }
       return()
     }
 
