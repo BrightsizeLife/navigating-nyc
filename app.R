@@ -282,6 +282,8 @@ ui <- page_fluid(
       textInput("addr", "Address (optional)", placeholder = "e.g., Times Square, New York, NY"),
       p(style = "font-size: 11px; color: #666; margin-top: -10px;",
         "Enter address to find nearest stations"),
+      actionButton("test_times_sq", "Test: Times Square", style = "font-size: 11px; padding: 3px 8px;"),
+      actionButton("test_chelsea", "Test: Chelsea Market", style = "font-size: 11px; padding: 3px 8px; margin-left: 5px;"),
       sliderInput("walkCap", "Walk time cap (minutes)", min = 3, max = 30, value = 15, step = 1),
       div(
         sliderInput("gridRes", "Fidelity", min = 0.002, max = 0.01, value = 0.004, step = 0.001),
@@ -451,6 +453,25 @@ server <- function(input, output, session) {
   # ----------------- Nearest Stations tab -----------------
   geocoded_address <- reactiveVal(NULL)
 
+  # Test address buttons (bypass Nominatim rate limits)
+  observeEvent(input$test_times_sq, {
+    geocoded_address(tibble::tibble(
+      lat = 40.758,
+      lon = -73.9855,
+      display_name = "Times Square, Manhattan, NY (test address)"
+    ))
+    showNotification("Using test address: Times Square", type = "message", duration = 3)
+  })
+
+  observeEvent(input$test_chelsea, {
+    geocoded_address(tibble::tibble(
+      lat = 40.7425,
+      lon = -74.0061,
+      display_name = "Chelsea Market, 75 9th Ave, Manhattan, NY (test address)"
+    ))
+    showNotification("Using test address: Chelsea Market", type = "message", duration = 3)
+  })
+
   observeEvent(input$geocode, {
     req(input$addr, nchar(input$addr) > 3)
 
@@ -461,10 +482,23 @@ server <- function(input, output, session) {
       return()
     }
 
-    # Geocode
-    geo <- geocode_nominatim(input$addr)
+    # Geocode with error handling
+    geo <- tryCatch({
+      geocode_nominatim(input$addr)
+    }, error = function(e) {
+      if (grepl("403", e$message)) {
+        showNotification("Nominatim rate limit hit. Please wait 1 minute and try again, or use hardcoded test addresses.",
+                        type = "error", duration = 8)
+      } else {
+        showNotification(paste("Geocoding error:", e$message), type = "error", duration = 5)
+      }
+      return(NULL)
+    })
+
     if (is.null(geo)) {
-      showNotification("Address not found via Nominatim.", type = "error", duration = 5)
+      if (!grepl("403", as.character(sys.calls()))) {
+        showNotification("Address not found via Nominatim.", type = "error", duration = 5)
+      }
       return()
     }
 
