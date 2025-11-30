@@ -135,12 +135,14 @@ fetch_osm_stops_for_lines <- function(lines, force = FALSE) {
 
   sf <- st_as_sf(combined, coords = c("lon","lat"), crs = 4326)
 
-  # Deduplicate close nodes by rounded coordinate
+  # Deduplicate close nodes by rounded coordinate AND name
   coords <- st_coordinates(sf)
   sf <- sf |>
     mutate(lat_round = round(coords[,2], 5),
            lon_round = round(coords[,1], 5)) |>
-    distinct(lat_round, lon_round, .keep_all = TRUE) |>
+    group_by(name, lat_round, lon_round) |>
+    slice(1) |>  # Take first occurrence of each name at same location
+    ungroup() |>
     select(-lat_round, -lon_round)
 
   saveRDS(sf, key)
@@ -230,7 +232,10 @@ nearest_stations_by_line <- function(pt_sf, stations_sf, selected_lines, n = 3) 
       lat = s_coords[ix,2],
       distance_m = d_m[ix],
       walk_min = round(approx_walk_minutes(d_m[ix]), 1)
-    )
+    ) |>
+      group_by(line, name) |>
+      slice(1) |>  # Remove duplicate station names per line
+      ungroup()
   }
 
   bind_rows(results)
@@ -252,7 +257,10 @@ nearest_stations_overall <- function(pt_sf, stations_sf, n = 3) {
     lat = s_coords[ix,2],
     distance_m = d_m[ix],
     walk_min = round(approx_walk_minutes(d_m[ix]), 1)
-  )
+  ) |>
+    group_by(name) |>
+    slice(1) |>  # Remove duplicate station names
+    ungroup()
 }
 
 # -------------------------
@@ -271,6 +279,9 @@ ui <- page_fluid(
         "lines", "Subway lines (OSM 'ref')", choices = DEFAULT_LINES,
         selected = c("A","C","L"), multiple = TRUE, options = list(plugins = list("remove_button"))
       ),
+      textInput("addr", "Address (optional)", placeholder = "e.g., Times Square, New York, NY"),
+      p(style = "font-size: 11px; color: #666; margin-top: -10px;",
+        "Enter address to find nearest stations"),
       sliderInput("walkCap", "Walk time cap (minutes)", min = 3, max = 30, value = 15, step = 1),
       div(
         sliderInput("gridRes", "Fidelity", min = 0.002, max = 0.01, value = 0.004, step = 0.001),
@@ -279,7 +290,10 @@ ui <- page_fluid(
                  tags$span("High (slower)"),
                  tags$span("Low (faster)"))
       ),
-      actionButton("refresh", "Fetch / Refresh Lines", icon = icon("rotate"))
+      actionButton("refresh", "Fetch / Refresh Lines", icon = icon("rotate")),
+      hr(),
+      actionButton("geocode", "Find Nearest Stations", icon = icon("magnifying-glass"),
+                   style = "width: 100%; margin-top: 10px;")
     ),
     card(
       navset_tab(
@@ -287,14 +301,19 @@ ui <- page_fluid(
             p("Continuous raster showing walk time to nearest station. Dark purple = close, bright yellow = far. Areas beyond the walk cap are transparent."),
             leafletOutput("heatmap", height = 600)
         ),
-        nav_panel("Address specificity",
-            p("Enter an address; see the 5 nearest stations (by selected lines) and walking times."),
-            textInput("addr", "Address (NYC)", placeholder = "e.g., 1 Centre St, New York, NY"),
-            actionButton("geocode", "Find stations", icon = icon("magnifying-glass")),
-            br(), br(),
-            leafletOutput("specific", height = 600),
-            br(),
-            tableOutput("nearest_tbl")
+        nav_panel("Nearest Stations",
+            p("Enter an address in the sidebar to see nearest stations by selected lines and overall."),
+            uiOutput("address_display"),
+            hr(),
+            h5("Table 1: Nearest Stations by Line"),
+            p(style = "font-size: 12px; color: #666;",
+              "3 nearest stations for each selected subway line"),
+            tableOutput("table_by_line"),
+            hr(),
+            h5("Table 2: Nearest Stations Overall"),
+            p(style = "font-size: 12px; color: #666;",
+              "3 nearest stations regardless of line"),
+            tableOutput("table_overall")
         )
       )
     )
@@ -429,53 +448,89 @@ server <- function(input, output, session) {
       addControl(html = legend_txt, position = "bottomleft")
   })
   
-  # ----------------- Specificity tab -----------------
+  # ----------------- Nearest Stations tab -----------------
+  geocoded_address <- reactiveVal(NULL)
+
   observeEvent(input$geocode, {
     req(input$addr, nchar(input$addr) > 3)
+
+    # Check if stations are loaded
+    stns <- stations_rv()
+    if (nrow(stns) == 0) {
+      showNotification("No stations loaded yet. Click 'Fetch / Refresh Lines' first.", type = "warning", duration = 6)
+      return()
+    }
+
     # Geocode
     geo <- geocode_nominatim(input$addr)
     if (is.null(geo)) {
       showNotification("Address not found via Nominatim.", type = "error", duration = 5)
       return()
     }
-    pt <- st_as_sf(geo, coords = c("lon","lat"), crs = 4326)
-    stns <- stations_rv()
-    if (nrow(stns) == 0) {
-      showNotification("No stations loaded yet. Click 'Fetch / Refresh Lines' first.", type = "warning", duration = 6)
-      return()
-    }
-    tbl <- nearest_n_stations(pt, stns, n = 5)
-    output$nearest_tbl <- renderTable({
-      if (nrow(tbl) == 0) return(NULL)
-      tibble::tibble(
-        Station = tbl$name %||% "Unknown",
-        `Walk (min)` = tbl$walk_min,
-        `Distance (m)` = round(tbl$distance_m),
-        Lon = round(tbl$lon, 5),
-        Lat = round(tbl$lat, 5)
-      )
-    })
-    
-    # Map
-    leafletProxy("specific") |>
-      clearMarkers() |>
-      clearShapes() |>
-      addProviderTiles("CartoDB.Positron") |>
-      fitBounds(min(tbl$lon, geo$lon), min(tbl$lat, geo$lat),
-                max(tbl$lon, geo$lon), max(tbl$lat, geo$lat)) |>
-      addAwesomeMarkers(lng = geo$lon, lat = geo$lat, icon = awesomeIcons(icon = "home", markerColor = "blue"),
-                        popup = htmltools::HTML(paste0("<b>Address</b><br/>", htmltools::htmlEscape(geo$display_name)))) |>
-      addCircleMarkers(data = st_as_sf(tbl, coords = c("lon","lat"), crs = 4326),
-                       radius = 6, color = "#2A9D8F", fillOpacity = 0.9,
-                       popup = ~paste0("<b>", htmltools::htmlEscape(name %||% "Station"), "</b><br/>Walk: ",
-                                       htmltools::htmlEscape(as.character(walk_min %||% NA)), " min"))
+
+    geocoded_address(geo)
+    showNotification(paste("Found:", geo$display_name), type = "message", duration = 3)
   }, ignoreInit = TRUE)
-  
-  output$specific <- renderLeaflet({
-    leaflet(options = leafletOptions(zoomControl = TRUE, preferCanvas = TRUE)) |>
-      addProviderTiles("CartoDB.Positron") |>
-      setView(lng = -73.9851, lat = 40.758, zoom = 12)
+
+  # Display the geocoded address
+  output$address_display <- renderUI({
+    geo <- geocoded_address()
+    if (is.null(geo)) {
+      return(p(style = "color: #666; font-style: italic;", "No address entered yet. Enter an address in the sidebar and click 'Find Nearest Stations'."))
+    }
+    tags$div(
+      style = "background: #e8f4f8; padding: 10px; border-radius: 5px; margin-bottom: 10px;",
+      tags$strong("Address: "), geo$display_name, tags$br(),
+      tags$small(paste0("Coordinates: ", round(geo$lat, 4), ", ", round(geo$lon, 4)))
+    )
   })
+
+  # Table 1: Nearest stations by line
+  output$table_by_line <- renderTable({
+    geo <- geocoded_address()
+    if (is.null(geo)) return(NULL)
+
+    stns <- stations_rv()
+    if (nrow(stns) == 0) return(NULL)
+
+    pt <- st_as_sf(geo, coords = c("lon","lat"), crs = 4326)
+    tbl <- nearest_stations_by_line(pt, stns, input$lines, n = 3)
+
+    if (nrow(tbl) == 0) {
+      return(data.frame(Message = "No stations found for selected lines"))
+    }
+
+    tibble::tibble(
+      Line = tbl$line,
+      Station = tbl$name,
+      `Lines Served` = tbl$lines_served,
+      `Walk Time (min)` = tbl$walk_min,
+      `Distance (m)` = round(tbl$distance_m)
+    )
+  }, striped = TRUE, hover = TRUE, bordered = TRUE)
+
+  # Table 2: Nearest stations overall
+  output$table_overall <- renderTable({
+    geo <- geocoded_address()
+    if (is.null(geo)) return(NULL)
+
+    stns <- stations_rv()
+    if (nrow(stns) == 0) return(NULL)
+
+    pt <- st_as_sf(geo, coords = c("lon","lat"), crs = 4326)
+    tbl <- nearest_stations_overall(pt, stns, n = 3)
+
+    if (nrow(tbl) == 0) {
+      return(data.frame(Message = "No stations found"))
+    }
+
+    tibble::tibble(
+      Station = tbl$name,
+      `Lines Served` = tbl$lines_served,
+      `Walk Time (min)` = tbl$walk_min,
+      `Distance (m)` = round(tbl$distance_m)
+    )
+  }, striped = TRUE, hover = TRUE, bordered = TRUE)
 }
 
 shinyApp(ui, server)
