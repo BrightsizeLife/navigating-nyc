@@ -321,6 +321,12 @@ ui <- page_fluid(
             p(style = "font-size: 12px; color: #666;",
               "3 nearest stations regardless of line"),
             tableOutput("table_overall")
+        ),
+        nav_panel("Reference Table",
+            p("All loaded stations with distances from your address, sorted by distance."),
+            uiOutput("reference_address_display"),
+            hr(),
+            DT::dataTableOutput("reference_table")
         )
       )
     )
@@ -567,6 +573,54 @@ server <- function(input, output, session) {
       `Distance (m)` = round(tbl$distance_m)
     )
   }, striped = TRUE, hover = TRUE, bordered = TRUE)
+
+  # ----------------- Reference Table tab -----------------
+  output$reference_address_display <- renderUI({
+    geo <- geocoded_address()
+    if (is.null(geo)) {
+      return(p(style = "color: #666; font-style: italic;", "No address entered yet. Enter an address in the sidebar and click 'Find Nearest Stations'."))
+    }
+    tags$div(
+      style = "background: #e8f4f8; padding: 10px; border-radius: 5px; margin-bottom: 10px;",
+      tags$strong("Address: "), geo$display_name, tags$br(),
+      tags$small(paste0("Coordinates: ", round(geo$lat, 4), ", ", round(geo$lon, 4)))
+    )
+  })
+
+  output$reference_table <- DT::renderDataTable({
+    geo <- geocoded_address()
+    if (is.null(geo)) return(NULL)
+
+    stns <- stations_rv()
+    if (nrow(stns) == 0) return(NULL)
+
+    # Calculate distances from address to all stations (no API call)
+    pt <- st_coordinates(st_as_sf(geo, coords = c("lon", "lat"), crs = 4326))[1,]
+    s_coords <- st_coordinates(stns)
+    distances_m <- haversine_m(pt[1], pt[2], s_coords[,1], s_coords[,2])
+    walk_min <- approx_walk_minutes(distances_m)
+
+    # Build reference table with all stations sorted by distance
+    ref_tbl <- tibble::tibble(
+      Station = stns$name %||% NA_character_,
+      Latitude = round(s_coords[,2], 5),
+      Longitude = round(s_coords[,1], 5),
+      `Distance (m)` = round(distances_m),
+      `Walk Time (min)` = round(walk_min, 1),
+      `Lines Served` = stns$lines
+    ) |>
+      arrange(`Distance (m)`)
+
+    DT::datatable(
+      ref_tbl,
+      options = list(
+        pageLength = 25,
+        scrollX = TRUE,
+        order = list(list(3, 'asc'))  # Sort by Distance column
+      ),
+      rownames = FALSE
+    )
+  })
 }
 
 shinyApp(ui, server)
