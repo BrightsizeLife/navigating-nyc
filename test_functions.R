@@ -1,14 +1,10 @@
 # test_functions.R
-# Test the new nearest station functions
+# Test the nearest station functions using static MTA data
 
 library(sf)
-library(httr2)
-library(jsonlite)
 library(dplyr)
-library(purrr)
-library(tidyr)
 
-# Source the helper functions from app.R
+# Source the helper functions from app.R (loads ALL_STATIONS_SF at top level)
 source("app.R", local = TRUE)
 
 cat("\n========================================\n")
@@ -34,10 +30,12 @@ cat("  Display Name:", geo$display_name, "\n\n")
 
 pt <- st_as_sf(geo, coords = c("lon", "lat"), crs = 4326)
 
-# Step 2: Fetch stations for selected lines
-cat("Step 2: Fetching stations for lines", paste(test_lines, collapse = ", "), "...\n")
-stations <- fetch_osm_stops_for_lines(test_lines, force = TRUE)
-cat("  Total stations fetched:", nrow(stations), "\n\n")
+# Step 2: Filter stations for selected lines
+cat("Step 2: Filtering stations for lines", paste(test_lines, collapse = ", "), "...\n")
+cat("  Total stations in MTA dataset:", nrow(ALL_STATIONS_SF), "\n")
+pattern <- paste0("\\b(", paste(test_lines, collapse = "|"), ")\\b")
+stations <- ALL_STATIONS_SF |> filter(grepl(pattern, lines))
+cat("  Stations for selected lines:", nrow(stations), "\n\n")
 
 if (nrow(stations) > 0) {
   cat("  Sample of stations:\n")
@@ -76,7 +74,19 @@ if (nrow(table2) > 0) {
 }
 cat("\n")
 
-# Step 5: Summary stats
+# Step 5: Test nearest_stations_from_unselected
+cat("========================================\n")
+cat("TABLE 3: Nearest 3 on Unselected Lines\n")
+cat("========================================\n")
+table3 <- nearest_stations_from_unselected(pt, ALL_STATIONS_SF, test_lines, n = 3)
+if (nrow(table3) > 0) {
+  print(table3 |> select(name, lines_served, walk_min, distance_m))
+} else {
+  cat("No results\n")
+}
+cat("\n")
+
+# Step 6: Summary stats
 cat("========================================\n")
 cat("Summary Statistics\n")
 cat("========================================\n")
@@ -88,5 +98,9 @@ cat("  Walk time range:", min(table1$walk_min, na.rm = TRUE), "-", max(table1$wa
 cat("Table 2 (overall):\n")
 cat("  Total rows:", nrow(table2), "\n")
 cat("  Walk time range:", min(table2$walk_min, na.rm = TRUE), "-", max(table2$walk_min, na.rm = TRUE), "min\n\n")
+
+cat("Table 3 (unselected lines):\n")
+cat("  Total rows:", nrow(table3), "\n")
+cat("  Walk time range:", min(table3$walk_min, na.rm = TRUE), "-", max(table3$walk_min, na.rm = TRUE), "min\n\n")
 
 cat("Test complete!\n")

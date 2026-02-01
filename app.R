@@ -1,10 +1,9 @@
 # app.R
-# NYC Walkability — Subway-focused explorer (free APIs: Overpass + Nominatim)
+# NYC Walkability — Subway-focused explorer
 # Notes:
-# - Line selection uses OSM 'route=subway' relations filtered by ref (e.g., A, C, L).
-# - Walk times are approximated (straight-line distance / 1.4 m/s) to avoid paid routing APIs.
-# - Data are cached under ./cache to reduce API calls.
-# - Respect OSM/Nominatim usage policies: include a descriptive user agent + email.
+# - Station data from MTA static CSV (data/mta_stations.csv) — no API calls for stations.
+# - Walk times use Manhattan distance (|Δlat| + |Δlon|) at 1.4 m/s — better for NYC's grid.
+# - Address geocoding uses Photon (free, OSM-based, no rate-limit issues).
 
 library(shiny)
 library(bslib)
@@ -20,7 +19,6 @@ library(stringr)
 library(scales)
 
 options(scipen = 999)
-dir.create("cache", showWarnings = FALSE)
 
 # -------------------------
 # Utility
@@ -35,39 +33,13 @@ dir.create("cache", showWarnings = FALSE)
 # -------------------------
 # Config
 # -------------------------
-APP_USER_AGENT <- "NYC-Walkability-Shiny (contact: youremail@example.com)"
+APP_USER_AGENT <- "NYC-Walkability-Shiny/1.0"
 NYC_BBOX <- c(-74.3, 40.45, -73.65, 40.95) # (min lon, min lat, max lon, max lat)
 DEFAULT_LINES <- c("A","C","E","B","D","F","M","G","J","Z","L","N","Q","R","W","1","2","3","4","5","6","7","S")
 
 # -------------------------
 # Helpers
 # -------------------------
-
-bbox_to_overpass <- function(bbox) {
-  # Overpass expects south,west,north,east => minlat, minlon, maxlat, maxlon
-  paste0(bbox[2], ",", bbox[1], ",", bbox[4], ",", bbox[3])
-}
-
-overpass_query_for_lines <- function(lines, bbox = NYC_BBOX) {
-  # Build an Overpass QL query that fetches route=subway relations
-  # whose 'ref' matches any of the selected line letters/numbers,
-  # then pulls member nodes with role 'stop'/'platform' (stations).
-  # We also pull 'station' nodes just in case (belt & suspenders).
-  ref_regex <- paste(lines, collapse = "|")
-  bbox_str <- bbox_to_overpass(bbox)
-
-  q <- sprintf(
-    '[out:json][timeout:60];
-rel["route"="subway"]["ref"~"^(%s)$"](%s);
-(
-  node(r:"stop");
-  node(r:"platform");
-);
-out tags geom;',
-    ref_regex, bbox_str
-  )
-  q
-}
 
 http_get_json <- function(url, query = list()) {
   req <- request(url) |>
@@ -80,87 +52,46 @@ http_get_json <- function(url, query = list()) {
     fromJSON(simplifyVector = FALSE)
 }
 
-fetch_osm_stops_for_lines <- function(lines, force = FALSE) {
-  key <- paste0("cache/overpass_stops_", digest::digest(sort(lines)), ".rds")
-  if (file.exists(key) && !force) {
-    return(readRDS(key))
-  }
+load_mta_stations <- function(path = "data/mta_stations.csv") {
+  raw <- read.csv(path, stringsAsFactors = FALSE, check.names = FALSE)
 
-  # NEW: Fetch each line separately to track which stations belong to which line
-  all_stations <- list()
-
-  for (line in lines) {
-    q <- overpass_query_for_lines(line)
-    q <- paste(q, collapse = "\n")
-
-    tryCatch({
-      resp <- request("https://overpass-api.de/api/interpreter") |>
-        req_user_agent(APP_USER_AGENT) |>
-        req_url_query(data = q) |>
-        req_timeout(90) |>
-        req_retry(max_tries = 3, backoff = ~5) |>
-        req_perform()
-
-      dat <- resp |> resp_body_string() |> fromJSON(simplifyVector = FALSE)
-
-      if (!is.null(dat$elements) && length(dat$elements) > 0) {
-        nodes <- purrr::keep(dat$elements, ~ .x$type == "node")
-        if (length(nodes) > 0) {
-          df <- tibble::tibble(
-            osm_id = vapply(nodes, function(x) as.character(x$id), character(1)),
-            lat = vapply(nodes, function(x) x$lat %||% NA_real_, numeric(1)),
-            lon = vapply(nodes, function(x) x$lon %||% NA_real_, numeric(1)),
-            name = vapply(nodes, function(x) x$tags$name %||% NA_character_, character(1)),
-            line = line  # Track which line this station belongs to
-          ) |> tidyr::drop_na(lat, lon)
-
-          all_stations[[line]] <- df
-        }
-      }
-      Sys.sleep(0.5)  # Be nice to Overpass API
-    }, error = function(e) {
-      warning(paste("Failed to fetch line", line, ":", e$message))
-    })
-  }
-
-  if (length(all_stations) == 0) {
-    return(sf::st_sf(osm_id = character(), name = character(), lines = character(),
-                     geometry = st_sfc(), crs = 4326))
-  }
-
-  # Combine all stations and aggregate lines per station
-  combined <- bind_rows(all_stations) |>
-    group_by(osm_id, lat, lon, name) |>
-    summarise(lines = paste(sort(unique(line)), collapse = ","), .groups = "drop")
-
-  sf <- st_as_sf(combined, coords = c("lon","lat"), crs = 4326)
-
-  # Deduplicate close nodes by rounded coordinate AND name
-  coords <- st_coordinates(sf)
-  sf <- sf |>
-    mutate(lat_round = round(coords[,2], 5),
-           lon_round = round(coords[,1], 5)) |>
+  stations <- raw |>
+    transmute(
+      name      = `Stop Name`,
+      lines     = gsub(" ", ",", `Daytime Routes`),
+      latitude  = `GTFS Latitude`,
+      longitude = `GTFS Longitude`
+    ) |>
+    filter(!is.na(latitude), !is.na(longitude), nchar(name) > 0) |>
+    mutate(
+      lat_round = round(latitude, 4),
+      lon_round = round(longitude, 4)
+    ) |>
     group_by(name, lat_round, lon_round) |>
-    slice(1) |>  # Take first occurrence of each name at same location
-    ungroup() |>
+    summarise(
+      lines     = paste(sort(unique(unlist(strsplit(lines, ",")))), collapse = ","),
+      latitude  = mean(latitude),
+      longitude = mean(longitude),
+      .groups   = "drop"
+    ) |>
     select(-lat_round, -lon_round)
 
-  saveRDS(sf, key)
-  sf
+  st_as_sf(stations, coords = c("longitude", "latitude"), crs = 4326)
 }
 
-# Haversine distance in meters between two lon/lat points
-haversine_m <- function(lon1, lat1, lon2, lat2) {
-  R <- 6371000
-  toRad <- pi/180
-  dlat <- (lat2 - lat1) * toRad
-  dlon <- (lon2 - lon1) * toRad
-  a <- sin(dlat/2)^2 + cos(lat1*toRad)*cos(lat2*toRad)*sin(dlon/2)^2
-  c <- 2 * atan2(sqrt(a), sqrt(1-a))
-  R * c
+# Load all MTA stations once at app startup
+ALL_STATIONS_SF <- load_mta_stations()
+
+# Manhattan distance in meters (|Δlat| + |Δlon| in meters).
+# Better walk estimate for NYC's grid than straight-line haversine.
+manhattan_m <- function(lon1, lat1, lon2, lat2) {
+  m_per_deg_lat <- 111320
+  avg_lat_rad <- (lat1 + lat2) / 2 * pi / 180
+  m_per_deg_lon <- 111320 * cos(avg_lat_rad)
+  abs(lat2 - lat1) * m_per_deg_lat + abs(lon2 - lon1) * m_per_deg_lon
 }
 
-approx_walk_minutes <- function(meters, m_per_s = 1.4) {
+walk_minutes <- function(meters, m_per_s = 1.4) {
   meters / m_per_s / 60
 }
 
@@ -173,18 +104,22 @@ make_grid_points <- function(bbox = NYC_BBOX, step_deg = 0.004) {
     st_as_sf(coords = c("lon","lat"), crs = 4326)
 }
 
-# Nominatim geocoding (free). Respect their ToS: add email in UA and throttle if heavy.
-geocode_nominatim <- function(address) {
+# Photon geocoder (free, OSM data, no rate-limit issues for single calls)
+geocode_address <- function(address) {
   if (is.null(address) || !nzchar(address)) return(NULL)
   res <- http_get_json(
-    "https://nominatim.openstreetmap.org/search",
-    query = list(q = address, format = "jsonv2", limit = 1, addressdetails = 0)
+    "https://photon.komoot.io/api/",
+    query = list(q = address, limit = 1)
   )
-  if (length(res) == 0) return(NULL)
+  feats <- res$features
+  if (is.null(feats) || length(feats) == 0) return(NULL)
+  coords <- feats[[1]]$geometry$coordinates  # [lon, lat]
+  props  <- feats[[1]]$properties
+  label  <- paste(c(props$name, props$district, props$city, props$state), collapse = ", ")
   tibble::tibble(
-    lat = as.numeric(res[[1]]$lat),
-    lon = as.numeric(res[[1]]$lon),
-    display_name = res[[1]]$display_name %||% address
+    lat = coords[[2]],
+    lon = coords[[1]],
+    display_name = if (nzchar(label)) label else address
   )
 }
 
@@ -192,14 +127,14 @@ nearest_n_stations <- function(pt_sf, stations_sf, n = 5) {
   if (nrow(stations_sf) == 0) return(tibble::tibble())
   pt <- st_coordinates(pt_sf)[1,]
   s_coords <- st_coordinates(stations_sf)
-  d_m <- haversine_m(pt[1], pt[2], s_coords[,1], s_coords[,2])
+  d_m <- manhattan_m(pt[1], pt[2], s_coords[,1], s_coords[,2])
   ix <- order(d_m)[seq_len(min(n, length(d_m)))]
   tibble::tibble(
     name = stations_sf$name[ix] %||% NA_character_,
     lon = s_coords[ix,1],
     lat = s_coords[ix,2],
     distance_m = d_m[ix],
-    walk_min = round(approx_walk_minutes(d_m[ix]), 1)
+    walk_min = round(walk_minutes(d_m[ix]), 1)
   )
 }
 
@@ -221,7 +156,7 @@ nearest_stations_by_line <- function(pt_sf, stations_sf, selected_lines, n = 3) 
 
     # Calculate distances
     s_coords <- st_coordinates(line_stations)
-    d_m <- haversine_m(pt[1], pt[2], s_coords[,1], s_coords[,2])
+    d_m <- manhattan_m(pt[1], pt[2], s_coords[,1], s_coords[,2])
     ix <- order(d_m)[seq_len(min(n, length(d_m)))]
 
     results[[line]] <- tibble::tibble(
@@ -231,7 +166,7 @@ nearest_stations_by_line <- function(pt_sf, stations_sf, selected_lines, n = 3) 
       lon = s_coords[ix,1],
       lat = s_coords[ix,2],
       distance_m = d_m[ix],
-      walk_min = round(approx_walk_minutes(d_m[ix]), 1)
+      walk_min = round(walk_minutes(d_m[ix]), 1)
     ) |>
       group_by(line, name) |>
       slice(1) |>  # Remove duplicate station names per line
@@ -247,7 +182,7 @@ nearest_stations_overall <- function(pt_sf, stations_sf, n = 3) {
 
   pt <- st_coordinates(pt_sf)[1,]
   s_coords <- st_coordinates(stations_sf)
-  d_m <- haversine_m(pt[1], pt[2], s_coords[,1], s_coords[,2])
+  d_m <- manhattan_m(pt[1], pt[2], s_coords[,1], s_coords[,2])
   ix <- order(d_m)[seq_len(min(n, length(d_m)))]
 
   tibble::tibble(
@@ -256,11 +191,23 @@ nearest_stations_overall <- function(pt_sf, stations_sf, n = 3) {
     lon = s_coords[ix,1],
     lat = s_coords[ix,2],
     distance_m = d_m[ix],
-    walk_min = round(approx_walk_minutes(d_m[ix]), 1)
+    walk_min = round(walk_minutes(d_m[ix]), 1)
   ) |>
     group_by(name) |>
     slice(1) |>  # Remove duplicate station names
     ungroup()
+}
+
+# Find n nearest stations on lines the user did NOT select (discovery feature)
+nearest_stations_from_unselected <- function(pt_sf, all_stations_sf, selected_lines, n = 3) {
+  if (nrow(all_stations_sf) == 0 || length(selected_lines) == 0) return(tibble::tibble())
+
+  pattern <- paste0("\\b(", paste(selected_lines, collapse = "|"), ")\\b")
+  unselected_stations <- all_stations_sf |> filter(!grepl(pattern, lines))
+
+  if (nrow(unselected_stations) == 0) return(tibble::tibble())
+
+  nearest_stations_overall(pt_sf, unselected_stations, n = n)
 }
 
 # -------------------------
@@ -271,18 +218,16 @@ ui <- page_fluid(
   tags$head(tags$title("NYC Walkability • Subway-focused")),
   layout_sidebar(
     sidebar = sidebar(
-      h4("NYC Walkability (Free-API MVP)"),
-      p("Pick subway lines and explore walkability by foot. Data from OpenStreetMap/Overpass + Nominatim."),
+      h4("NYC Walkability"),
+      p("Pick subway lines and explore walkability by foot. Station data from MTA; address geocoding via Photon."),
       hr(),
-      h5("Step 1: Select Lines & Fetch Data"),
+      h5("Select Subway Lines"),
       selectizeInput(
-        "lines", "Subway lines (OSM 'ref')", choices = DEFAULT_LINES,
+        "lines", "Subway lines", choices = DEFAULT_LINES,
         selected = c("A","C","L"), multiple = TRUE, options = list(plugins = list("remove_button"))
       ),
-      actionButton("refresh", "Fetch / Refresh Lines", icon = icon("rotate"),
-                   style = "width: 100%; margin-bottom: 15px;"),
       hr(),
-      h5("Step 2: Find Nearest Stations (optional)"),
+      h5("Find Nearest Stations"),
       p(style = "font-size: 11px; color: #666;",
         "Click a test button below, OR type an address and click 'Find Nearest Stations'."),
       actionButton("test_times_sq", "Test: Times Square", style = "font-size: 11px; padding: 3px 8px;"),
@@ -310,6 +255,10 @@ ui <- page_fluid(
         ),
         nav_panel("Nearest Stations",
             p("Enter an address in the sidebar to see nearest stations by selected lines and overall."),
+            p(style = "font-size: 11px; color: #888; font-style: italic;",
+              "Walk times use Manhattan distance (\u0394lat + \u0394lon) at 1.4 m/s (~3.1 mph). ",
+              "This approximates walking on NYC's street grid. Actual times may vary with route, traffic lights, etc. ",
+              "Stations beyond your walk time cap are excluded."),
             uiOutput("address_display"),
             hr(),
             h5("Table 1: Nearest Stations by Line"),
@@ -320,7 +269,12 @@ ui <- page_fluid(
             h5("Table 2: Nearest Stations Overall"),
             p(style = "font-size: 12px; color: #666;",
               "3 nearest stations regardless of line"),
-            tableOutput("table_overall")
+            tableOutput("table_overall"),
+            hr(),
+            h5("Table 3: Nearest Stations on Other Lines"),
+            p(style = "font-size: 12px; color: #666;",
+              "3 nearest stations on lines you haven't selected (discover new routes)"),
+            tableOutput("table_unselected")
         ),
         nav_panel("Reference Table",
             p("All loaded stations with distances from your address, sorted by distance."),
@@ -337,21 +291,13 @@ ui <- page_fluid(
 # Server
 # -------------------------
 server <- function(input, output, session) {
-  lines_rv <- reactiveVal(character())
-  stations_rv <- reactiveVal(st_sf(osm_id = character(), name = character(), geometry = st_sfc(crs = 4326)))
-  
-  fetch_lines <- function() {
-    req(length(input$lines) > 0)
-    showNotification("Fetching stations for selected lines from Overpass…", type = "message", duration = 4)
-    sf_pts <- fetch_osm_stops_for_lines(input$lines)
-    if (nrow(sf_pts) == 0) {
-      showNotification("No stations found for those lines (OSM). Try different lines.", type = "error", duration = 5)
-    }
-    stations_rv(sf_pts)
-    lines_rv(input$lines)
-  }
-  
-  observeEvent(input$refresh, fetch_lines())
+  # Filter ALL_STATIONS_SF to only stations serving at least one selected line
+  stations_rv <- reactive({
+    sel <- input$lines
+    if (length(sel) == 0) return(st_sf(name = character(), lines = character(), geometry = st_sfc(crs = 4326)))
+    pattern <- paste0("\\b(", paste(sel, collapse = "|"), ")\\b")
+    ALL_STATIONS_SF |> filter(grepl(pattern, lines))
+  })
   
   # ----------------- Heatmap tab -----------------
   output$heatmap <- renderLeaflet({
@@ -377,11 +323,11 @@ server <- function(input, output, session) {
 
     # For each grid point, compute distance to nearest station
     nearest_m <- sapply(seq_len(nrow(g_coords)), function(i) {
-      d <- haversine_m(g_coords[i,1], g_coords[i,2], s_coords[,1], s_coords[,2])
+      d <- manhattan_m(g_coords[i,1], g_coords[i,2], s_coords[,1], s_coords[,2])
       min(d)
     })
 
-    minutes <- pmin(approx_walk_minutes(nearest_m), input$walkCap)
+    minutes <- pmin(walk_minutes(nearest_m), input$walkCap)
 
     # Console diagnostics
     cat("\n=== Heatmap diagnostics ===\n")
@@ -456,7 +402,7 @@ server <- function(input, output, session) {
         data = stations_rv(), radius = 3, color = "#00FFFF", weight = 2,
         fillColor = "#0080FF", opacity = 1, fillOpacity = 0.9,
         popup = ~paste0("<b>", htmltools::htmlEscape(name %||% "Station"), "</b><br/>Lines: ",
-                        htmltools::htmlEscape(paste(lines_rv(), collapse = ", ")))
+                        htmltools::htmlEscape(gsub(",", ", ", lines)))
       ) |>
       addControl(html = legend_txt, position = "bottomleft")
   })
@@ -464,7 +410,7 @@ server <- function(input, output, session) {
   # ----------------- Nearest Stations tab -----------------
   geocoded_address <- reactiveVal(NULL)
 
-  # Test address buttons (bypass Nominatim rate limits)
+  # Test address buttons (hardcoded coords, no API call needed)
   observeEvent(input$test_times_sq, {
     geocoded_address(tibble::tibble(
       lat = 40.758,
@@ -486,29 +432,18 @@ server <- function(input, output, session) {
   observeEvent(input$geocode, {
     req(input$addr, nchar(input$addr) > 3)
 
-    # Check if stations are loaded
-    stns <- stations_rv()
-    if (nrow(stns) == 0) {
-      showNotification("No stations loaded yet. Click 'Fetch / Refresh Lines' first.", type = "warning", duration = 6)
-      return()
-    }
-
-    # Geocode with error handling
+    # Single API call: address → lat/lon. Everything else is pure R math.
     geo <- tryCatch({
-      geocode_nominatim(input$addr)
+      geocode_address(input$addr)
     }, error = function(e) {
-      if (grepl("403", e$message)) {
-        showNotification("Nominatim rate limit hit. Please wait 1 minute and try again, or use hardcoded test addresses.",
-                        type = "error", duration = 8)
-      } else {
-        showNotification(paste("Geocoding error:", e$message), type = "error", duration = 5)
-      }
+      showNotification(
+        paste("Geocoding failed:", e$message, "— try a test button instead."),
+        type = "error", duration = 8
+      )
       return(NULL)
     })
 
-    if (is.null(geo)) {
-      return()
-    }
+    if (is.null(geo)) return()
 
     geocoded_address(geo)
     showNotification(paste("Found:", geo$display_name), type = "message", duration = 3)
@@ -536,10 +471,11 @@ server <- function(input, output, session) {
     if (nrow(stns) == 0) return(NULL)
 
     pt <- st_as_sf(geo, coords = c("lon","lat"), crs = 4326)
-    tbl <- nearest_stations_by_line(pt, stns, input$lines, n = 3)
+    tbl <- nearest_stations_by_line(pt, stns, input$lines, n = 3) |>
+      filter(walk_min <= input$walkCap)
 
     if (nrow(tbl) == 0) {
-      return(data.frame(Message = "No stations found for selected lines"))
+      return(data.frame(Message = "No stations within walk time cap"))
     }
 
     tibble::tibble(
@@ -560,10 +496,32 @@ server <- function(input, output, session) {
     if (nrow(stns) == 0) return(NULL)
 
     pt <- st_as_sf(geo, coords = c("lon","lat"), crs = 4326)
-    tbl <- nearest_stations_overall(pt, stns, n = 3)
+    tbl <- nearest_stations_overall(pt, stns, n = 3) |>
+      filter(walk_min <= input$walkCap)
 
     if (nrow(tbl) == 0) {
-      return(data.frame(Message = "No stations found"))
+      return(data.frame(Message = "No stations within walk time cap"))
+    }
+
+    tibble::tibble(
+      Station = tbl$name,
+      `Lines Served` = tbl$lines_served,
+      `Walk Time (min)` = tbl$walk_min,
+      `Distance (m)` = round(tbl$distance_m)
+    )
+  }, striped = TRUE, hover = TRUE, bordered = TRUE)
+
+  # Table 3: Nearest stations on lines user did NOT select
+  output$table_unselected <- renderTable({
+    geo <- geocoded_address()
+    if (is.null(geo)) return(NULL)
+
+    pt <- st_as_sf(geo, coords = c("lon", "lat"), crs = 4326)
+    tbl <- nearest_stations_from_unselected(pt, ALL_STATIONS_SF, input$lines, n = 3) |>
+      filter(walk_min <= input$walkCap)
+
+    if (nrow(tbl) == 0) {
+      return(data.frame(Message = "No stations on other lines within walk time cap"))
     }
 
     tibble::tibble(
@@ -597,8 +555,8 @@ server <- function(input, output, session) {
     # Calculate distances from address to all stations (no API call)
     pt <- st_coordinates(st_as_sf(geo, coords = c("lon", "lat"), crs = 4326))[1,]
     s_coords <- st_coordinates(stns)
-    distances_m <- haversine_m(pt[1], pt[2], s_coords[,1], s_coords[,2])
-    walk_min <- approx_walk_minutes(distances_m)
+    distances_m <- manhattan_m(pt[1], pt[2], s_coords[,1], s_coords[,2])
+    walk_min <- walk_minutes(distances_m)
 
     # Build reference table with all stations sorted by distance
     ref_tbl <- tibble::tibble(
