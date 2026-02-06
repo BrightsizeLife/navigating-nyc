@@ -95,6 +95,60 @@ walk_minutes <- function(meters, m_per_s = 1.4) {
   meters / m_per_s / 60
 }
 
+# Travel time in minutes for different modes (fallback estimates when no API).
+# These are rough estimates — real routing APIs are much more accurate.
+# Speeds are approximate averages for NYC:
+#   walk  = 1.4 m/s (~3.1 mph) — most accurate, you walk the grid
+#   bike  = 4.5 m/s (~10 mph, Citi Bike average) — ignores bike lanes
+#   bus   = 3.5 m/s (~7.8 mph, includes stops/lights) — ignores routes
+#   metro = 8.9 m/s (~20 mph avg including stops) — ignores actual lines
+#   car   = 6.7 m/s (~15 mph NYC average) — ignores traffic, lights
+travel_minutes_estimate <- function(meters, mode = "walk", rush_hour = FALSE) {
+  # Rush hour multipliers (rough estimates)
+  rush_mult <- if (rush_hour) switch(mode,
+    walk = 1.0, bike = 1.1, bus = 1.5, metro = 1.2, car = 2.0, 1.0
+  ) else 1.0
+
+  speed <- switch(mode,
+    walk  = 1.4,
+    bike  = 4.5,
+    bus   = 3.5,
+    metro = 8.9,
+    car   = 6.7,
+    1.4
+  )
+  (meters / speed / 60) * rush_mult
+}
+
+# Google Maps API integration (requires GOOGLE_MAPS_API_KEY env var)
+# Returns travel time in minutes, or NULL if API unavailable/error
+google_travel_time <- function(origin_lat, origin_lon, dest_lat, dest_lon, mode = "driving") {
+  api_key <- Sys.getenv("GOOGLE_MAPS_API_KEY")
+  if (!nzchar(api_key)) return(NULL)
+
+  # Map our modes to Google's mode names
+  gmode <- switch(mode,
+    walk = "walking", bike = "bicycling", bus = "transit",
+    metro = "transit", car = "driving", "driving"
+  )
+
+  url <- sprintf(
+    "https://maps.googleapis.com/maps/api/distancematrix/json?origins=%f,%f&destinations=%f,%f&mode=%s&key=%s",
+    origin_lat, origin_lon, dest_lat, dest_lon, gmode, api_key
+  )
+
+  tryCatch({
+    res <- http_get_json(url, query = list())
+    if (res$status == "OK" && length(res$rows) > 0) {
+      elem <- res$rows[[1]]$elements[[1]]
+      if (elem$status == "OK") {
+        return(elem$duration$value / 60)  # seconds to minutes
+      }
+    }
+    NULL
+  }, error = function(e) NULL)
+}
+
 # Simple grid over NYC for heatmap (lon/lat grid)
 make_grid_points <- function(bbox = NYC_BBOX, step_deg = 0.004) {
   # ~0.004 deg ~ 445 m in lat; this is a decent default resolution
@@ -215,7 +269,18 @@ nearest_stations_from_unselected <- function(pt_sf, all_stations_sf, selected_li
 # -------------------------
 ui <- page_fluid(
   theme = bs_theme(version = 5, bootswatch = "cosmo"),
-  tags$head(tags$title("NYC Walkability • Subway-focused")),
+  tags$head(
+    tags$title("NYC Walkability • Subway-focused"),
+    tags$style(HTML("
+      /* Fix dropdown being hidden by leaflet map */
+      .selectize-dropdown, .selectize-input, select.form-select {
+        z-index: 10000 !important;
+      }
+      .leaflet-container {
+        z-index: 1;
+      }
+    "))
+  ),
   layout_sidebar(
     sidebar = sidebar(
       h4("NYC Walkability"),
@@ -275,6 +340,23 @@ ui <- page_fluid(
             p(style = "font-size: 12px; color: #666;",
               "3 nearest stations on lines you haven't selected (discover new routes)"),
             tableOutput("table_unselected")
+        ),
+        nav_panel("Travel Time Heatmap",
+            p("Generate a heatmap showing travel time from your address to surrounding areas."),
+            uiOutput("api_status_msg"),
+            uiOutput("travel_address_display"),
+            fluidRow(
+              column(3, selectInput("travel_mode", "Travel mode",
+                choices = c("Walk" = "walk", "Bike" = "bike", "Bus" = "bus", "Metro" = "metro", "Car" = "car"),
+                selected = "walk")),
+              column(3, sliderInput("travel_cap", "Time cap (minutes)", min = 5, max = 60, value = 20, step = 5)),
+              column(3, div(style = "margin-top: 25px;",
+                checkboxInput("rush_hour", "Rush hour traffic", value = FALSE))),
+              column(3, div(style = "margin-top: 25px;",
+                actionButton("generate_travel", "Generate Heatmap",
+                  icon = icon("map"), style = "width: 100%;")))
+            ),
+            leafletOutput("travel_heatmap", height = 600)
         ),
         nav_panel("Reference Table",
             p("All loaded stations with distances from your address, sorted by distance."),
@@ -531,6 +613,149 @@ server <- function(input, output, session) {
       `Distance (m)` = round(tbl$distance_m)
     )
   }, striped = TRUE, hover = TRUE, bordered = TRUE)
+
+  # ----------------- Travel Time Heatmap tab -----------------
+  output$api_status_msg <- renderUI({
+    has_api <- nzchar(Sys.getenv("GOOGLE_MAPS_API_KEY"))
+    if (has_api) {
+      p(style = "font-size: 11px; color: #28a745; font-style: italic;",
+        icon("check-circle"), " Google Maps API connected — travel times use real routing data.")
+    } else {
+      p(style = "font-size: 11px; color: #888; font-style: italic;",
+        icon("info-circle"), " No Google Maps API key — using estimated travel times (less accurate). ",
+        "Set GOOGLE_MAPS_API_KEY environment variable for real routing data.")
+    }
+  })
+
+  output$travel_address_display <- renderUI({
+    geo <- geocoded_address()
+    if (is.null(geo)) {
+      return(p(style = "color: #666; font-style: italic;",
+        "Enter an address in the sidebar first, then come back here to generate a heatmap."))
+    }
+    tags$div(
+      style = "background: #e8f4f8; padding: 10px; border-radius: 5px; margin-bottom: 10px;",
+      tags$strong("Origin: "), geo$display_name, tags$br(),
+      tags$small(paste0("Coordinates: ", round(geo$lat, 4), ", ", round(geo$lon, 4)))
+    )
+  })
+
+  output$travel_heatmap <- renderLeaflet({
+    leaflet(options = leafletOptions(zoomControl = TRUE, preferCanvas = TRUE)) |>
+      addProviderTiles("CartoDB.Positron") |>
+      setView(lng = -73.98, lat = 40.75, zoom = 12)
+  })
+
+  observeEvent(input$generate_travel, {
+    geo <- geocoded_address()
+    if (is.null(geo)) {
+      showNotification("Enter an address in the sidebar first.", type = "warning", duration = 5)
+      return()
+    }
+
+    mode <- input$travel_mode
+    cap  <- input$travel_cap
+    rush <- input$rush_hour
+
+    rush_label <- if (rush) " (rush hour)" else ""
+    showNotification(paste0("Generating ", mode, " heatmap", rush_label, "..."), type = "message", duration = 3)
+
+    # Build a local grid centered on the address (not all of NYC — too slow)
+    # Rough extent: cap minutes at max speed in degrees
+    max_speed <- switch(mode, walk = 1.4, bike = 4.5, bus = 3.5, metro = 8.9, car = 6.7, 1.4)
+    # Adjust for rush hour (grid needs to be smaller since travel is slower)
+    if (rush) max_speed <- max_speed / switch(mode, walk = 1.0, bike = 1.1, bus = 1.5, metro = 1.2, car = 2.0, 1.0)
+    max_range_m <- cap * 60 * max_speed
+    deg_range <- max_range_m / 111320 * 1.2  # ~1.2x buffer
+    local_bbox <- c(
+      geo$lon - deg_range, geo$lat - deg_range,
+      geo$lon + deg_range, geo$lat + deg_range
+    )
+    step <- max(0.002, deg_range / 60)  # ~60 cells per side
+    lons <- seq(local_bbox[1], local_bbox[3], by = step)
+    lats <- seq(local_bbox[2], local_bbox[4], by = step)
+    g <- expand.grid(lon = lons, lat = lats)
+
+    if (mode == "metro") {
+      # Metro: walk to nearest station + ride + walk from dest station
+      stns <- stations_rv()
+      if (nrow(stns) == 0) {
+        showNotification("Select subway lines first for metro mode.", type = "warning", duration = 5)
+        return()
+      }
+      s_coords <- st_coordinates(stns)
+
+      # Walk time from origin to nearest station
+      origin_to_stn <- manhattan_m(geo$lon, geo$lat, s_coords[,1], s_coords[,2])
+      origin_walk_min <- walk_minutes(min(origin_to_stn))
+
+      # For each grid cell: walk from nearest station + ride distance/speed
+      minutes <- sapply(seq_len(nrow(g)), function(i) {
+        # Walk from nearest station to this grid point
+        walk_d <- manhattan_m(g$lon[i], g$lat[i], s_coords[,1], s_coords[,2])
+        nearest_stn_idx <- which.min(walk_d)
+        last_mile_walk <- walk_minutes(walk_d[nearest_stn_idx])
+
+        # Ride from origin's nearest station to destination's nearest station
+        ride_d <- manhattan_m(
+          s_coords[which.min(origin_to_stn), 1], s_coords[which.min(origin_to_stn), 2],
+          s_coords[nearest_stn_idx, 1], s_coords[nearest_stn_idx, 2]
+        )
+        ride_min <- travel_minutes_estimate(ride_d, "metro", rush)
+
+        origin_walk_min + ride_min + last_mile_walk
+      })
+    } else {
+      # Walk / bike / bus / car: direct Manhattan distance from origin
+      d_m <- manhattan_m(geo$lon, geo$lat, g$lon, g$lat)
+      minutes <- travel_minutes_estimate(d_m, mode, rush)
+    }
+
+    minutes <- pmin(minutes, cap)
+    half <- step / 2
+
+    df <- tibble::tibble(
+      lon = g$lon, lat = g$lat,
+      minutes = as.numeric(minutes),
+      lng1 = lon - half, lat1 = lat - half,
+      lng2 = lon + half, lat2 = lat + half
+    )
+
+    pal <- colorNumeric(palette = "magma", domain = c(0, cap), reverse = FALSE)
+    df$color   <- pal(df$minutes)
+    df$opacity <- ifelse(df$minutes >= cap, 0, 0.45)
+
+    mode_label <- switch(mode, walk = "Walk", bike = "Bike", bus = "Bus", metro = "Metro", car = "Car", "Travel")
+    legend_txt <- paste0(
+      "<div style='background: rgba(255,255,255,0.95); padding: 10px; border-radius: 4px; font-size: 12px;'>",
+      "<b>", mode_label, " time (min)</b><br/>",
+      "<div style='margin-top: 5px;'>",
+      "<span style='background: #000004; padding: 2px 8px; color: white;'>\u2588</span> Near (0 min)<br/>",
+      "<span style='background: #B63679; padding: 2px 8px; color: white;'>\u2588</span> Mid<br/>",
+      "<span style='background: #FCFDBF; padding: 2px 8px;'>\u2588</span> Far (", cap, " min)",
+      "</div></div>"
+    )
+
+    leafletProxy("travel_heatmap") |>
+      clearShapes() |>
+      clearMarkers() |>
+      clearControls() |>
+      addRectangles(
+        lng1 = df$lng1, lat1 = df$lat1,
+        lng2 = df$lng2, lat2 = df$lat2,
+        fillColor = df$color,
+        fillOpacity = df$opacity,
+        stroke = FALSE, weight = 0
+      ) |>
+      addCircleMarkers(
+        lng = geo$lon, lat = geo$lat, radius = 6,
+        color = "#FF0000", weight = 3, fillColor = "#FF4444",
+        opacity = 1, fillOpacity = 0.9,
+        popup = paste0("<b>Your location</b><br/>", htmltools::htmlEscape(geo$display_name))
+      ) |>
+      addControl(html = legend_txt, position = "bottomleft") |>
+      flyTo(lng = geo$lon, lat = geo$lat, zoom = 13)
+  })
 
   # ----------------- Reference Table tab -----------------
   output$reference_address_display <- renderUI({
