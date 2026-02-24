@@ -616,15 +616,9 @@ server <- function(input, output, session) {
 
   # ----------------- Travel Time Heatmap tab -----------------
   output$api_status_msg <- renderUI({
-    has_api <- nzchar(Sys.getenv("GOOGLE_MAPS_API_KEY"))
-    if (has_api) {
-      p(style = "font-size: 11px; color: #28a745; font-style: italic;",
-        icon("check-circle"), " Google Maps API connected — travel times use real routing data.")
-    } else {
-      p(style = "font-size: 11px; color: #888; font-style: italic;",
-        icon("info-circle"), " No Google Maps API key — using estimated travel times (less accurate). ",
-        "Set GOOGLE_MAPS_API_KEY environment variable for real routing data.")
-    }
+    p(style = "font-size: 11px; color: #888; font-style: italic;",
+      icon("info-circle"), " Travel times are estimates using Manhattan distance at mode-specific speeds. ",
+      "Walk is most accurate; other modes are rough approximations. Rush hour applies multipliers (2x for car, 1.5x for bus, etc.).")
   })
 
   output$travel_address_display <- renderUI({

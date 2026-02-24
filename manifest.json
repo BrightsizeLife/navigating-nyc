@@ -1292,7 +1292,7 @@
     },
     "leaflet.extras": {
       "Source": "CRAN",
-      "Repository": "https://cloud.r-project.org",
+      "Repository": null,
       "description": {
         "Package": "leaflet.extras",
         "Type": "Package",
@@ -2630,7 +2630,7 @@
       "checksum": "0269e5871f1539925b5305cb5deccfb4"
     },
     "app.R": {
-      "checksum": "05f43c778eba926bc4cbdc03574b3f04"
+      "checksum": "3363a202982145c8300a67b480292555"
     },
     "cache/._overpass_stops_887a49628c645579752c8f2e724ecd0f.rds": {
       "checksum": "a98afc33f0afaacafa924b9d075adef7"
