@@ -1,18 +1,44 @@
-# NYC Walkability — static web page
+# navigating nyc — static web page
 
-A no-Shiny version of `app.R`. Same four views, same maths, but it runs entirely in the
-browser: no R process, no server, no API keys, no build step.
+A no-Shiny version of `app.R`, presented as a Cheap Sensationalism data piece in light
+mode. Same four views, same maths, but it runs entirely in the browser: no R process,
+no server, no API keys, no build step.
 
 ```
 docs/
-├── index.html              markup for the whole page
+├── index.html              markup for the whole page (CSP + privacy notes live here)
 ├── assets/
 │   ├── app.js              UI, maps, tables, network calls
 │   ├── geo.js              pure distance/travel-time maths (also runs in Node)
-│   └── styles.css
+│   ├── colors_and_type.css canonical Cheap Sensationalism tokens (fonts self-hosted)
+│   ├── cs-light.css        documented light-mode derivation of those tokens
+│   └── styles.css          layout + components, built on the tokens
 ├── data/stations.js        493 stations, generated from ../data/mta_stations.csv
-└── vendor/leaflet/         Leaflet 1.9.4, vendored (BSD-2-Clause, LICENSE included)
+└── vendor/
+    ├── leaflet/            Leaflet 1.9.4, vendored (BSD-2-Clause, LICENSE included)
+    └── fonts/              Space Mono woff2, self-hosted (SIL OFL 1.1, LICENSE included)
 ```
+
+## Design
+
+The page runs in the design system's `.mode-data` (Space Mono chrome, data-signal
+accents) with a light-mode token layer derived in `assets/cs-light.css`: the canonical
+dark ground and warm off-white text swap roles, fills keep canonical values, and text
+gets darker `-ink` companions that all measure ≥ 4.5:1 (WCAG AA) against their
+backgrounds. Two color families are deliberately not brand tokens: official MTA route
+colors and the magma walk-time ramp — they carry outside semantics.
+
+## Privacy
+
+No cookies, no local storage, no analytics, no third-party fonts. A `Content-Security-
+Policy` meta tag pins scripts/styles/fonts to the page's own origin and network calls to
+exactly three free services: CARTO (tiles), Photon/Nominatim (geocoding, only when
+[locate] is pressed), and OSRM (only when the road-network box is ticked). The page never
+sends a referrer; API calls send origin-only so the OSM services can identify the app per
+their usage policies. The URL hash stores the chosen origin to make views shareable —
+that's client-side only, but a shared link shares the address. GitHub Pages cannot set
+response headers, which is why the CSP ships as a meta tag (everything but
+`frame-ancestors` works that way).
 
 ## Running it
 
@@ -64,8 +90,12 @@ routes and averages the coordinates — the same reduction `load_mta_stations()`
 ## Tests
 
 ```sh
-node tools/test_geo.js     # 90 checks on the maths in geo.js
+node tools/test_geo.js          # 90 checks on the maths in geo.js (no dependencies)
+node tools/e2e_page_test.mjs    # 71 browser checks (needs playwright; see file header)
 ```
+
+CI (`.github/workflows/checks.yml`) runs the math suite plus a drift check that fails if
+`docs/data/stations.js` no longer matches a fresh regeneration from the CSV.
 
 The suite pins the formulas to the ones in `app.R` (Manhattan distance, 1.4 m/s walking,
 per-mode speeds, rush-hour multipliers, the three-leg metro model) and asserts that the

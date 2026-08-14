@@ -346,8 +346,9 @@ input[type="range"] { width: 100%; accent-color: var(--cs-data-warm-ink); }
 .panel[hidden] { display: none; }
 .panel:focus { outline: none; }
 
-/* In-panel section heads: the .cs-data-section-head pattern. */
-.panel h3 {
+/* In-panel section heads: the .cs-data-section-head pattern.
+   h2 in the markup so heading levels don't skip (h1 → h2). */
+.panel h2 {
   margin: var(--cs-space-8) 0 var(--cs-space-1);
   font-size: var(--cs-text-essay-head);
   font-weight: 600;
@@ -357,7 +358,7 @@ input[type="range"] { width: 100%; accent-color: var(--cs-data-warm-ink); }
   padding-bottom: var(--cs-space-2);
   border-bottom: 1px solid var(--cs-border-data);
 }
-.panel h3:first-of-type { margin-top: var(--cs-space-4); }
+.panel h2:first-of-type { margin-top: var(--cs-space-4); }
 
 .panel-intro {
   margin: var(--cs-space-2) 0 var(--cs-space-3);

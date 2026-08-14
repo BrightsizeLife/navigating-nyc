@@ -1,0 +1,26 @@
+# Cheap, free-tier CI for the static page:
+#  - the 90-check math suite (no dependencies)
+#  - drift detection: docs/data/stations.js must match a fresh regeneration
+#    from data/mta_stations.csv, so the two can never silently diverge.
+# The browser e2e suite (tools/e2e_page_test.mjs) stays local-only to keep CI
+# under a minute; run it before big UI changes.
+name: checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  page:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: math suite
+        run: node tools/test_geo.js
+      - name: stations data matches source CSV
+        run: |
+          python3 tools/build_stations_data.py
+          git diff --exit-code docs/data/stations.js

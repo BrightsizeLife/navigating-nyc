@@ -64,14 +64,15 @@
 
   function $(id) { return document.getElementById(id); }
 
-  // Small DOM builder — everything user- or API-supplied goes in as text.
+  // Small DOM builder. Deliberately has NO innerHTML path — everything user-
+  // or API-supplied enters the DOM as text, which is what makes the geocoder
+  // and URL-hash inputs injection-proof.
   function h(tag, props, children) {
     var node = document.createElement(tag);
     if (props) {
       Object.keys(props).forEach(function (k) {
         if (k === 'class') node.className = props[k];
         else if (k === 'text') node.textContent = props[k];
-        else if (k === 'html') node.innerHTML = props[k];
         else if (k === 'style') node.setAttribute('style', props[k]);
         else if (k.slice(0, 2) === 'on') node.addEventListener(k.slice(2), props[k]);
         else if (props[k] === true) node.setAttribute(k, '');
@@ -117,10 +118,18 @@
   }
 
   // fetch with a hard timeout, so a slow public API can't hang the button.
+  // referrerPolicy: the page-wide policy is no-referrer; these API calls send
+  // origin-only instead, because the OSM services' usage policies ask callers
+  // to identify themselves. The origin carries no address or map state
+  // (fragments are never sent in Referer headers anyway).
   function fetchJSON(url, ms) {
     var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
     var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, ms || 12000);
-    return fetch(url, { signal: ctrl ? ctrl.signal : undefined, headers: { Accept: 'application/json' } })
+    return fetch(url, {
+      signal: ctrl ? ctrl.signal : undefined,
+      referrerPolicy: 'strict-origin',
+      headers: { Accept: 'application/json' }
+    })
       .then(function (res) {
         if (!res.ok) throw new Error('HTTP ' + res.status);
         return res.json();

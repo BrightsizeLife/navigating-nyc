@@ -4,10 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>navigating nyc — subway walkability</title>
-<meta name="description" content="How far everything in New York is from the train. Walk times computed in your browser — no server, no accounts, no tracking.">
+<meta name="description" content="How far everything in New York is from the train. Walk times computed in your browser — no server, no accounts, no api keys.">
 
 <!-- Privacy + security hardening for a static page:
-     · no referrer ever leaves the page (the URL hash can hold an address)
+     · referrer suppressed page-wide; the app's own API calls opt back in to
+       origin-only (see fetchJSON) so the OSM services can identify the caller
      · CSP pins scripts/styles/fonts to this origin and network calls to the
        three free services the page can talk to (frame-ancestors can't be set
        from a meta tag; everything else is locked down here) -->
@@ -40,7 +41,7 @@
   <h1>navigating nyc</h1>
   <p class="app-header__sub">
     how far everything is from the train. computed in your browser — no server, no accounts,
-    no api keys, nothing logged.
+    no api keys, no analytics.
   </p>
 </header>
 
@@ -134,7 +135,7 @@
         <div id="map-walk" class="map"></div>
         <div class="map-readout" id="walk-readout" aria-live="off" hidden></div>
       </div>
-      <h3>coverage</h3>
+      <h2>coverage</h2>
       <p class="hint">
         percentages are shares of the whole bounding box — which includes open water and a slice
         of new jersey, so compare line selections with them rather than reading them as a census.
@@ -149,18 +150,18 @@
       <div class="origin-banner" id="nearest-origin"></div>
       <p class="hint">stations further than the walk time cap are left out of all three tables.</p>
 
-      <h3>nearest by line</h3>
+      <h2>nearest by line</h2>
       <p class="panel-intro">
         the three closest stops on each line you selected. a line shows fewer rows when the rest
         of its stops fall outside the walk cap.
       </p>
       <div class="table-scroll" id="table-by-line"></div>
 
-      <h3>nearest overall</h3>
+      <h2>nearest overall</h2>
       <p class="panel-intro">the three closest stops among your selected lines, whichever line they serve.</p>
       <div class="table-scroll" id="table-overall"></div>
 
-      <h3>nearest on other lines</h3>
+      <h2>nearest on other lines</h2>
       <p class="panel-intro">the three closest stops that serve none of your lines — routes you may be walking past.</p>
       <div class="table-scroll" id="table-unselected"></div>
     </section>

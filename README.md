@@ -26,7 +26,11 @@ Rscript test_functions.R    # nearest-station sanity check
 open docs/index.html                        # no server needed
 python3 -m http.server 8000 --directory docs # or serve it
 node tools/test_geo.js                      # 90 checks on the maths
+node tools/e2e_page_test.mjs                # browser suite (needs playwright)
 ```
+
+The page is styled as a Cheap Sensationalism data piece (light mode); the token
+system and its light-mode derivation live in `docs/assets/`.
 
 After editing `data/mta_stations.csv`, regenerate the page's bundled copy with
 `python3 tools/build_stations_data.py`. See [`docs/README.md`](docs/README.md) for how the
