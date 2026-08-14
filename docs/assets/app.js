@@ -1,9 +1,13 @@
-/* app.js — UI for the static NYC Walkability page.
+/* app.js — UI for the static "navigating nyc" page.
  *
  * Mirrors the Shiny app in app.R without a server: station data ships with the
  * page, all distance and travel-time maths runs in the browser (see geo.js),
  * and the only network calls are map tiles, address lookup, and the optional
  * OSRM road-network pass. No API keys anywhere.
+ *
+ * Chrome colors come from the Cheap Sensationalism tokens (see styles.css).
+ * Two families stay hex on purpose: official MTA route colors and the magma
+ * walk-time ramp — they carry outside semantics the brand doesn't override.
  */
 (function () {
   'use strict';
@@ -13,8 +17,8 @@
 
   if (!NYC || !DATA || !window.L) {
     document.body.insertAdjacentHTML('afterbegin',
-      '<p class="noscript">Could not load the map libraries or station data. ' +
-      'Make sure vendor/, data/ and assets/ sit next to index.html.</p>');
+      '<p class="noscript">could not load the map libraries or station data — ' +
+      'make sure vendor/, data/ and assets/ sit next to index.html.</p>');
     return;
   }
 
@@ -126,8 +130,8 @@
 
   // ------------------------------------------------------------ route badges
 
-  function routeColor(route) { return ROUTE_COLORS[route] || '#4b5563'; }
-  function routeInk(route) { return DARK_TEXT_ROUTES[route] ? '#111827' : '#ffffff'; }
+  function routeColor(route) { return ROUTE_COLORS[route] || '#67635b'; }
+  function routeInk(route) { return DARK_TEXT_ROUTES[route] ? '#0a0b10' : '#ffffff'; }
 
   function routeDot(route) {
     return h('span', {
@@ -214,8 +218,8 @@
         class: 'route' + (route.length > 1 ? ' route--wide' : ''),
         style: '--route-color:' + routeColor(route) + ';--route-ink:' + routeInk(route),
         'aria-pressed': on ? 'true' : 'false',
-        'aria-label': 'Line ' + route,
-        title: 'Line ' + route,
+        'aria-label': 'line ' + route,
+        title: 'line ' + route,
         text: route,
         onclick: function () { toggleLine(route); }
       }));
@@ -227,7 +231,7 @@
     var n = selectedStations().length;
     $('lines-summary').textContent = state.lines.length
       ? state.lines.length + ' line' + (state.lines.length === 1 ? '' : 's') + ' · ' + n + ' stations'
-      : 'No lines selected — pick at least one.';
+      : 'no lines selected — pick at least one.';
   }
 
   function toggleLine(route) {
@@ -350,19 +354,20 @@
 
   function busyOverlay(wrapEl, on, label) {
     var existing = wrapEl.querySelector('.map-busy');
+    wrapEl.setAttribute('aria-busy', on ? 'true' : 'false');
     if (!on) { if (existing) existing.remove(); return; }
     if (existing) { existing.textContent = label; return; }
-    wrapEl.appendChild(h('div', { class: 'map-busy', text: label }));
+    wrapEl.appendChild(h('div', { class: 'map-busy', role: 'status', text: label }));
   }
 
   function originMarker(map, ref, origin) {
     if (ref.marker) { map.removeLayer(ref.marker); ref.marker = null; }
     if (!origin) return;
     ref.marker = L.circleMarker([origin.lat, origin.lon], {
-      radius: 8, color: '#111827', weight: 3, fillColor: '#f1605d', fillOpacity: 1
+      radius: 8, color: '#0a0b10', weight: 3, fillColor: '#E8594F', fillOpacity: 1
     }).addTo(map);
     ref.marker.bindPopup(h('div', { class: 'station-popup' }, [
-      h('b', { text: 'Your location' }),
+      h('b', { text: 'your origin' }),
       h('span', { text: origin.label })
     ]));
   }
@@ -387,7 +392,7 @@
       if (m == null || !isFinite(m)) { readout.hidden = true; return; }
       readout.hidden = false;
       readout.textContent = m >= state.walkCap
-        ? 'Over ' + state.walkCap + ' min from a station on your lines'
+        ? 'over ' + state.walkCap + ' min from a station on your lines'
         : fmt(m, 1) + ' min walk to the nearest station';
     });
     walkMap.on('mouseout', function () { readout.hidden = true; });
@@ -404,7 +409,7 @@
       if (walkRasterRef.layer) { walkMap.removeLayer(walkRasterRef.layer); walkRasterRef.layer = null; }
       if (walkStationLayer) { walkMap.removeLayer(walkStationLayer); walkStationLayer = null; }
       walkCache = null;
-      walkLegend.set('Walk time', state.walkCap, 'No lines selected');
+      walkLegend.set('walk time', state.walkCap, 'no lines selected');
       renderWalkStats(null);
       return;
     }
@@ -412,7 +417,7 @@
     var key = state.lines.join(',') + '|' + state.gridRes;
     var needsCompute = !walkCache || walkCache.key !== key;
 
-    busyOverlay(wrap, true, needsCompute ? 'Computing walk times…' : 'Repainting…');
+    busyOverlay(wrap, true, needsCompute ? 'computing walk times…' : 'repainting…');
 
     // Let the browser paint the busy state before the synchronous number crunch.
     requestAnimationFrame(function () {
@@ -430,7 +435,7 @@
           drawRaster(walkMap, walkRasterRef, walkCache.grid, walkCache.minutes, state.walkCap);
           drawWalkStations(stations);
           originMarker(walkMap, walkOriginRef, state.origin);
-          walkLegend.set('Walk time to nearest station', state.walkCap,
+          walkLegend.set('walk time to nearest station', state.walkCap,
             walkCache.grid.cols + ' × ' + walkCache.grid.rows + ' cells');
           renderWalkStats(stations.length);
         } finally {
@@ -444,8 +449,8 @@
     if (walkStationLayer) walkMap.removeLayer(walkStationLayer);
     walkStationLayer = L.layerGroup(stations.map(function (s) {
       var marker = L.circleMarker([s.lat, s.lon], {
-        radius: 3.5, color: '#0b1220', weight: 1, opacity: .8,
-        fillColor: '#22d3ee', fillOpacity: .95
+        radius: 3.5, color: '#0a0b10', weight: 1, opacity: .8,
+        fillColor: '#00D4FF', fillOpacity: .95
       });
       marker.bindPopup(h('div', { class: 'station-popup' }, [
         h('b', { text: s.name }),
@@ -461,7 +466,7 @@
     clear(box);
 
     if (!walkCache) {
-      box.appendChild(h('p', { class: 'hint', text: 'Select at least one line to see coverage stats.' }));
+      box.appendChild(h('p', { class: 'hint', text: 'select at least one line to see coverage stats.' }));
       return;
     }
 
@@ -474,20 +479,20 @@
     // cap — the part of the map that is actually painted.
     var tiles = [
       {
-        label: 'Area within ' + cap + ' min',
+        label: 'area within ' + cap + ' min',
         value: covered ? fmt((100 * covered.n) / all.n, 1) : '0',
         unit: '%'
       },
-      { label: 'Median walk there', value: covered ? fmt(covered.median, 1) : '—', unit: 'min' },
+      { label: 'median walk there', value: covered ? fmt(covered.median, 1) : '—', unit: 'min' },
       {
-        label: 'Middle 50% there',
+        label: 'middle 50% there',
         value: covered ? fmt(covered.q1, 1) + '–' + fmt(covered.q3, 1) : '—',
         unit: 'min'
       },
-      { label: 'Stations mapped', value: String(stationCount), unit: '' }
+      { label: 'stations mapped', value: String(stationCount), unit: '' }
     ];
     all.within.forEach(function (w) {
-      tiles.push({ label: 'Within ' + w.minutes + ' min', value: fmt(w.pct, 1), unit: '%' });
+      tiles.push({ label: 'within ' + w.minutes + ' min', value: fmt(w.pct, 1), unit: '%' });
     });
 
     tiles.forEach(function (t) {
@@ -551,7 +556,7 @@
 
     var b = NYC.NYC_BBOX;
     if (origin.lon < b[0] || origin.lon > b[2] || origin.lat < b[1] || origin.lat > b[3]) {
-      toast('That address is outside the New York City map area — results will be thin.', 'warn', 6000);
+      toast('that address is outside the new york city map area — results will be thin.', 'warn', 6000);
     }
     refreshActiveTab();
     writeStateToUrl();
@@ -560,23 +565,23 @@
   function runGeocode() {
     var query = $('addr').value.trim();
     if (query.length < 3) {
-      toast('Type at least a few characters of an address.', 'warn');
+      toast('type at least a few characters of an address.', 'warn');
       return;
     }
     var btn = $('geocode'), status = $('geocode-status');
     btn.disabled = true;
     status.className = 'status status--busy';
-    status.textContent = 'Looking up “' + query + '”…';
+    status.textContent = 'looking up “' + query + '”…';
 
     geocode(query).then(function (origin) {
-      setOrigin(origin, 'Found: ' + origin.label + ' (via ' + origin.via + ')');
+      setOrigin(origin, 'found: ' + origin.label + ' (via ' + origin.via.toLowerCase() + ')');
       if (state.tab === 'walk' && walkMap) walkMap.flyTo([origin.lat, origin.lon], 14);
     }).catch(function (err) {
       status.className = 'status status--error';
       var offline = err && (err.name === 'AbortError' || err.message === 'Failed to fetch');
       status.textContent = offline
-        ? 'Geocoder unreachable. Use a quick place, or check your connection.'
-        : 'No match for that address. Try adding the borough, or use a quick place.';
+        ? 'geocoder unreachable. use a quick place below, or check your connection.'
+        : 'no match for that address. try adding the borough, or use a quick place.';
       toast(status.textContent, 'error', 6000);
     }).finally(function () { btn.disabled = false; });
   }
@@ -590,7 +595,7 @@
       return;
     }
     box.className = 'origin-banner';
-    box.appendChild(h('strong', { text: 'Origin: ' }));
+    box.appendChild(h('strong', { text: 'origin: ' }));
     box.appendChild(document.createTextNode(state.origin.label));
     box.appendChild(h('small', { text: state.origin.lat.toFixed(4) + ', ' + state.origin.lon.toFixed(4) }));
   }
@@ -612,13 +617,13 @@
 
   function renderNearest() {
     renderOriginBanner('nearest-origin',
-      'No address yet — enter one in the sidebar, or pick a quick place.');
+      'no address yet — enter one in the sidebar, or pick a quick place.');
 
     var byLineBox = $('table-by-line'), overallBox = $('table-overall'), otherBox = $('table-unselected');
     [byLineBox, overallBox, otherBox].forEach(clear);
 
     if (!state.origin) {
-      var msg = 'Set an address to fill this table.';
+      var msg = 'set an address to fill this table.';
       byLineBox.appendChild(h('p', { class: 'table-empty', text: msg }));
       overallBox.appendChild(h('p', { class: 'table-empty', text: msg }));
       otherBox.appendChild(h('p', { class: 'table-empty', text: msg }));
@@ -628,32 +633,32 @@
     var stations = selectedStations();
     var cap = state.walkCap;
     var withinCap = function (r) { return r.walk_min <= cap; };
-    var noneMsg = 'No stations within the ' + cap + '-minute walk cap.';
+    var noneMsg = 'no stations within the ' + cap + '-minute walk cap.';
 
     byLineBox.appendChild(buildTable([
-      { label: 'Line', render: function (r) { return routeDot(r.line); } },
-      { label: 'Station', render: function (r) { return r.name; } },
-      { label: 'Lines served', render: function (r) { return routeList(r.lines); } },
-      { label: 'Walk', num: true, render: function (r) { return fmt(r.walk_min, 1) + ' min'; } },
-      { label: 'Distance', num: true, render: function (r) { return fmtInt(r.distance_m) + ' m'; } }
+      { label: 'line', render: function (r) { return routeDot(r.line); } },
+      { label: 'station', render: function (r) { return r.name; } },
+      { label: 'lines served', render: function (r) { return routeList(r.lines); } },
+      { label: 'walk', num: true, render: function (r) { return fmt(r.walk_min, 1) + ' min'; } },
+      { label: 'distance', num: true, render: function (r) { return fmtInt(r.distance_m) + ' m'; } }
     ], NYC.nearestByLine(state.origin, stations, state.lines, 3).filter(withinCap),
-      state.lines.length ? noneMsg : 'Select at least one line.'));
+      state.lines.length ? noneMsg : 'select at least one line.'));
 
     var overallCols = [
-      { label: 'Station', render: function (r) { return r.name; } },
-      { label: 'Lines served', render: function (r) { return routeList(r.lines); } },
-      { label: 'Borough', render: function (r) { return NYC.boroughName(r.borough); } },
-      { label: 'Walk', num: true, render: function (r) { return fmt(r.walk_min, 1) + ' min'; } },
-      { label: 'Distance', num: true, render: function (r) { return fmtInt(r.distance_m) + ' m'; } }
+      { label: 'station', render: function (r) { return r.name; } },
+      { label: 'lines served', render: function (r) { return routeList(r.lines); } },
+      { label: 'borough', render: function (r) { return NYC.boroughName(r.borough); } },
+      { label: 'walk', num: true, render: function (r) { return fmt(r.walk_min, 1) + ' min'; } },
+      { label: 'distance', num: true, render: function (r) { return fmtInt(r.distance_m) + ' m'; } }
     ];
 
     overallBox.appendChild(buildTable(overallCols,
       NYC.nearestOverall(state.origin, stations, 3).filter(withinCap),
-      state.lines.length ? noneMsg : 'Select at least one line.'));
+      state.lines.length ? noneMsg : 'select at least one line.'));
 
     otherBox.appendChild(buildTable(overallCols,
       NYC.nearestFromUnselected(state.origin, STATIONS, state.lines, 3).filter(withinCap),
-      state.lines.length ? 'No stations on other lines within the cap.' : 'Select at least one line.'));
+      state.lines.length ? 'no stations on other lines within the cap.' : 'select at least one line.'));
   }
 
   // ------------------------------------------------------------- travel time
@@ -677,7 +682,7 @@
       readout.hidden = false;
       var label = NYC.MODE_LABELS[travelCache.mode] || 'Travel';
       readout.textContent = m >= travelCache.cap
-        ? 'Over ' + travelCache.cap + ' min by ' + label.toLowerCase()
+        ? 'over ' + travelCache.cap + ' min by ' + label.toLowerCase()
         : fmt(m, 1) + ' min by ' + label.toLowerCase();
     });
     travelMap.on('mouseout', function () { readout.hidden = true; });
@@ -685,7 +690,7 @@
 
   function renderTravelOrigin() {
     renderOriginBanner('travel-origin',
-      'No address yet — set one in the sidebar, then generate a heatmap.');
+      'no address yet — set one in the sidebar, then press [generate heatmap].');
   }
 
   function renderTravelMethod() {
@@ -694,23 +699,23 @@
     var osrmBox = $('use-osrm');
     osrmBox.disabled = !canOsrm;
 
-    var parts = ['Straight-line Manhattan distance at mode-specific NYC speeds (' +
+    var parts = ['straight-line manhattan distance at mode-specific nyc speeds (' +
       NYC.MODE_SPEEDS[mode] + ' m/s for ' + NYC.MODE_LABELS[mode].toLowerCase() + ').'];
 
     if (mode === 'metro') {
-      parts.push('Metro adds three legs: walk to your nearest station, ride, then walk from the ' +
-        'station nearest your destination. It ignores which lines actually connect.');
+      parts.push('metro adds three legs: walk to your nearest station, ride, then walk from the ' +
+        'station nearest your destination. it ignores which lines actually connect.');
     }
     if (state.travel.rush) {
-      parts.push('Rush hour multiplies times by ' + NYC.RUSH_MULT[mode] + '×.');
+      parts.push('rush hour multiplies times by ' + NYC.RUSH_MULT[mode] + '×.');
     }
     if (canOsrm) {
       parts.push(osrmBox.checked
-        ? 'Road-network mode samples real OSRM durations and stretches the estimate to match — ' +
-          'free public service, so it can be slow or unavailable.'
-        : 'Tick “Use road network” to calibrate against real OSRM routing.');
+        ? 'road-network mode samples real osrm durations (a free public service) and stretches ' +
+          'the estimate to match — sends sampled coordinates to osrm, can be slow.'
+        : 'tick “use road network” to calibrate against real osrm routing.');
     } else {
-      parts.push('Road-network routing is not available for this mode (the free OSRM instances ' +
+      parts.push('road-network routing is not available for this mode (the free osrm instances ' +
         'carry no transit data), so estimates are used.');
     }
     $('travel-method').textContent = parts.join(' ');
@@ -750,12 +755,12 @@
 
   function generateTravelHeatmap() {
     if (!state.origin) {
-      toast('Set an address in the sidebar first.', 'warn');
+      toast('set an address in the sidebar first.', 'warn');
       return;
     }
     var stations = selectedStations();
     if (state.travel.mode === 'metro' && !stations.length) {
-      toast('Metro mode needs at least one subway line selected.', 'warn');
+      toast('metro mode needs at least one subway line selected.', 'warn');
       return;
     }
 
@@ -772,7 +777,7 @@
     var grid = NYC.makeRasterGrid(bbox, Math.max(0.002, degRange / 60));
 
     btn.disabled = true;
-    busyOverlay(wrap, true, 'Computing ' + NYC.MODE_LABELS[mode].toLowerCase() + ' times…');
+    busyOverlay(wrap, true, 'computing ' + NYC.MODE_LABELS[mode].toLowerCase() + ' times…');
 
     requestAnimationFrame(function () {
       requestAnimationFrame(function () {
@@ -784,32 +789,32 @@
           travelCache = { grid: grid, minutes: minutes, cap: cap, mode: mode };
           drawRaster(travelMap, travelRasterRef, grid, minutes, cap);
           originMarker(travelMap, travelOriginRef, origin);
-          travelLegend.set(NYC.MODE_LABELS[mode] + ' time from origin', cap, note);
+          travelLegend.set(NYC.MODE_LABELS[mode].toLowerCase() + ' time from origin', cap, note);
           travelMap.flyTo([origin.lat, origin.lon], mode === 'walk' ? 14 : 13);
           busyOverlay(wrap, false);
           btn.disabled = false;
         };
 
         if (!wantOsrm) {
-          finish(rush ? 'Estimate · rush hour' : 'Estimate');
+          finish(rush ? 'estimate · rush hour' : 'estimate');
           return;
         }
 
-        busyOverlay(wrap, true, 'Asking OSRM for road-network times…');
+        busyOverlay(wrap, true, 'asking osrm for road-network times…');
         osrmRatios(grid, origin, minutes, mode).then(function (r) {
           ratios = r;
           if (r) {
             var mean = r.reduce(function (a, b) { return a + b.ratio; }, 0) / r.length;
-            finish('OSRM-calibrated · ' + r.length + ' samples · ' + fmt(mean, 2) + '× straight line');
-            toast('Calibrated against ' + r.length + ' OSRM road-network samples.', null, 4000);
+            finish('osrm-calibrated · ' + r.length + ' samples · ' + fmt(mean, 2) + '× straight line');
+            toast('calibrated against ' + r.length + ' osrm road-network samples.', null, 4000);
           } else {
-            finish('Estimate (OSRM returned nothing usable)');
-            toast('OSRM had no usable routes here — showing straight-line estimates.', 'warn', 6000);
+            finish('estimate (osrm returned nothing usable)');
+            toast('osrm had no usable routes here — showing straight-line estimates.', 'warn', 6000);
           }
         }).catch(function (err) {
-          finish('Estimate (OSRM unavailable)');
-          toast('Road-network routing unavailable (' + (err.message || 'request failed') +
-            '). Showing straight-line estimates.', 'warn', 7000);
+          finish('estimate (osrm unavailable)');
+          toast('road-network routing unavailable (' + (err.message || 'request failed') +
+            '). showing straight-line estimates.', 'warn', 7000);
         });
       });
     });
@@ -850,7 +855,7 @@
 
   function renderReference() {
     renderOriginBanner('reference-origin',
-      'No address yet — the table lists every station on your lines; set an address to add distances.');
+      'no address yet — the table lists every station on your lines; set an address to add distances.');
 
     var box = $('reference-table');
     clear(box);
@@ -862,31 +867,31 @@
     }
 
     var columns = [
-      { key: 'name', label: 'Station', render: function (r) { return r.name; } },
-      { key: 'lines', label: 'Lines', render: function (r) { return routeList(r.lines); } },
-      { key: 'borough', label: 'Borough', render: function (r) { return NYC.boroughName(r.borough); } },
+      { key: 'name', label: 'station', render: function (r) { return r.name; } },
+      { key: 'lines', label: 'lines', render: function (r) { return routeList(r.lines); } },
+      { key: 'borough', label: 'borough', render: function (r) { return NYC.boroughName(r.borough); } },
       {
-        key: 'ada', label: 'ADA', render: function (r) {
+        key: 'ada', label: 'ada', render: function (r) {
           return h('span', {
             class: 'ada' + (r.ada ? '' : ' ada--none'),
-            title: r.ada === 2 ? 'Partially accessible' : r.ada ? 'Accessible' : 'Not accessible',
-            text: r.ada === 2 ? 'Partial' : r.ada ? 'Yes' : '—'
+            title: r.ada === 2 ? 'partially accessible' : r.ada ? 'accessible' : 'not accessible',
+            text: r.ada === 2 ? 'partial' : r.ada ? 'yes' : '—'
           });
         }
       }
     ];
     if (hasOrigin) {
       columns.push({
-        key: 'distance_m', label: 'Distance (m)', num: true,
+        key: 'distance_m', label: 'distance (m)', num: true,
         render: function (r) { return fmtInt(r.distance_m); }
       });
       columns.push({
-        key: 'walk_min', label: 'Walk (min)', num: true,
+        key: 'walk_min', label: 'walk (min)', num: true,
         render: function (r) { return fmt(r.walk_min, 1); }
       });
     }
-    columns.push({ key: 'lat', label: 'Latitude', num: true, render: function (r) { return r.lat.toFixed(5); } });
-    columns.push({ key: 'lon', label: 'Longitude', num: true, render: function (r) { return r.lon.toFixed(5); } });
+    columns.push({ key: 'lat', label: 'latitude', num: true, render: function (r) { return r.lat.toFixed(5); } });
+    columns.push({ key: 'lon', label: 'longitude', num: true, render: function (r) { return r.lon.toFixed(5); } });
 
     var rows = referenceRows();
     var pages = Math.max(1, Math.ceil(rows.length / refState.size));
@@ -900,7 +905,7 @@
     if (!rows.length) {
       box.appendChild(h('p', {
         class: 'table-empty',
-        text: state.lines.length ? 'Nothing matches that filter.' : 'Select at least one line.'
+        text: state.lines.length ? 'nothing matches that filter.' : 'select at least one line.'
       }));
       clear($('ref-pager'));
       return;
@@ -941,7 +946,7 @@
     var to = Math.min(total, (refState.page + 1) * refState.size);
 
     pager.appendChild(h('button', {
-      type: 'button', class: 'btn btn--ghost', text: '‹ Prev',
+      type: 'button', class: 'btn btn--ghost', text: '[← prev]',
       disabled: refState.page === 0,
       onclick: function () { refState.page--; renderReference(); }
     }));
@@ -950,7 +955,7 @@
         ' · page ' + (refState.page + 1) + ' of ' + pages
     }));
     pager.appendChild(h('button', {
-      type: 'button', class: 'btn btn--ghost', text: 'Next ›',
+      type: 'button', class: 'btn btn--ghost', text: '[next →]',
       disabled: refState.page >= pages - 1,
       onclick: function () { refState.page++; renderReference(); }
     }));
@@ -958,7 +963,7 @@
 
   function downloadReferenceCsv() {
     var rows = referenceRows();
-    if (!rows.length) { toast('Nothing to download.', 'warn'); return; }
+    if (!rows.length) { toast('nothing to download.', 'warn'); return; }
 
     var header = ['station', 'lines', 'borough', 'ada', 'latitude', 'longitude'];
     if (state.origin) header.push('distance_m', 'walk_min');
@@ -993,7 +998,7 @@
         type: 'button', class: 'chip', text: p.label,
         onclick: function () {
           $('addr').value = '';
-          setOrigin({ lat: p.lat, lon: p.lon, label: p.name }, 'Using ' + p.label + '.');
+          setOrigin({ lat: p.lat, lon: p.lon, label: p.name }, 'using ' + p.label + ' — no lookup needed.');
           if (state.tab === 'walk' && walkMap) walkMap.flyTo([p.lat, p.lon], 14);
         }
       }));
@@ -1100,8 +1105,8 @@
     renderQuickPlaces();
     bindEvents();
 
-    $('data-credit').textContent = 'Station data: ' + DATA.count + ' stations across ' +
-      DATA.routes.length + ' routes, bundled from ' + DATA.source + '.';
+    $('data-credit').textContent = 'station data: ' + DATA.count + ' stations across ' +
+      DATA.routes.length + ' routes, bundled from ' + DATA.source + ' — no lookup at runtime.';
 
     if (state.origin) {
       $('geocode-status').textContent = state.origin.label;

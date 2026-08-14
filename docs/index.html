@@ -3,159 +3,193 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NYC Walkability — Subway-focused explorer</title>
-<meta name="description" content="Explore how walkable New York City is from the subway. Static page: no server, no API keys, MTA station data bundled in.">
+<title>navigating nyc — subway walkability</title>
+<meta name="description" content="How far everything in New York is from the train. Walk times computed in your browser — no server, no accounts, no tracking.">
+
+<!-- Privacy + security hardening for a static page:
+     · no referrer ever leaves the page (the URL hash can hold an address)
+     · CSP pins scripts/styles/fonts to this origin and network calls to the
+       three free services the page can talk to (frame-ancestors can't be set
+       from a meta tag; everything else is locked down here) -->
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.basemaps.cartocdn.com; connect-src https://photon.komoot.io https://nominatim.openstreetmap.org https://routing.openstreetmap.de; font-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="color-scheme" content="light">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23111827'/%3E%3Ccircle cx='16' cy='16' r='8' fill='none' stroke='%23f1605d' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='2.5' fill='%23fcfdbf'/%3E%3C/svg%3E">
+<meta name="theme-color" content="#f2f0e9">
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0b10'/%3E%3Ccircle cx='16' cy='16' r='8' fill='none' stroke='%23E8594F' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='2.5' fill='%23F5A623'/%3E%3C/svg%3E">
+
+<!-- Map tiles are the only render-blocking third party; warm the connection. -->
+<link rel="preconnect" href="https://a.basemaps.cartocdn.com">
+<link rel="dns-prefetch" href="https://b.basemaps.cartocdn.com">
+<link rel="dns-prefetch" href="https://c.basemaps.cartocdn.com">
+
+<link rel="preload" href="vendor/fonts/space-mono-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="vendor/fonts/space-mono-latin-700-normal.woff2" as="font" type="font/woff2" crossorigin>
+
 <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="assets/colors_and_type.css">
+<link rel="stylesheet" href="assets/cs-light.css">
 <link rel="stylesheet" href="assets/styles.css">
 </head>
-<body>
+<body class="mode-data">
+
+<a class="skip-link" href="#panel-walk">[skip to the map]</a>
 
 <header class="app-header">
-  <div class="app-header__title">
-    <h1>NYC Walkability</h1>
-    <p>Subway-focused explorer</p>
-  </div>
-  <p class="app-header__note">
-    Static page — no Shiny, no server, no API keys. MTA station data is bundled;
-    address lookup uses the free Photon geocoder.
+  <p class="app-header__kicker"><a href="https://cheapsensationalism.com">cheap sensationalism</a> · a data tool</p>
+  <h1>navigating nyc</h1>
+  <p class="app-header__sub">
+    how far everything is from the train. computed in your browser — no server, no accounts,
+    no api keys, nothing logged.
   </p>
 </header>
 
 <div class="app-body">
 
-  <aside class="sidebar" aria-label="Controls">
+  <aside class="sidebar" aria-label="controls">
 
     <section class="control-group">
-      <h2 id="lines-label">Subway lines</h2>
-      <p class="hint">Pick the lines you actually ride. Everything on this page is filtered to them.</p>
+      <h2 id="lines-label">subway lines</h2>
+      <p class="hint">pick the lines you actually ride. everything on this page filters to them.</p>
       <div id="route-picker" class="route-picker" role="group" aria-labelledby="lines-label"></div>
       <div class="row-actions">
-        <button type="button" class="btn btn--ghost" id="lines-all">Select all</button>
-        <button type="button" class="btn btn--ghost" id="lines-none">Clear</button>
-        <button type="button" class="btn btn--ghost" id="lines-default">Reset (A&nbsp;C&nbsp;L)</button>
+        <button type="button" class="btn btn--ghost" id="lines-all">[all]</button>
+        <button type="button" class="btn btn--ghost" id="lines-none">[none]</button>
+        <button type="button" class="btn btn--ghost" id="lines-default">[reset a·c·l]</button>
       </div>
       <p class="hint" id="lines-summary" aria-live="polite"></p>
     </section>
 
     <section class="control-group">
-      <h2><label for="addr">Address</label></h2>
-      <p class="hint">Sets the origin for the nearest-station tables, the travel-time map and the reference table.</p>
+      <h2><label for="addr">address</label></h2>
+      <p class="hint">sets the origin for the nearest-station tables, the travel-time map and the station table.</p>
       <div class="field-row">
-        <input type="search" id="addr" name="addr" placeholder="e.g. Chelsea Market, New York, NY"
+        <input type="search" id="addr" name="addr" placeholder="e.g. Chelsea Market, New York"
                autocomplete="off" spellcheck="false" enterkeyhint="search">
-        <button type="button" class="btn btn--primary" id="geocode">Locate</button>
+        <button type="button" class="btn btn--primary" id="geocode">[locate]</button>
       </div>
-      <p class="hint">Or jump to a known spot:</p>
+      <p class="hint">or jump somewhere known — these need no network at all:</p>
       <div class="chip-row" id="quick-places"></div>
       <p class="status" id="geocode-status" aria-live="polite"></p>
     </section>
 
     <section class="control-group">
-      <h2>Visualisation</h2>
+      <h2>visualisation</h2>
 
       <label class="slider-label" for="walk-cap">
-        Walk time cap <output id="walk-cap-out">15 min</output>
+        walk time cap <output id="walk-cap-out">15 min</output>
       </label>
       <input type="range" id="walk-cap" min="3" max="30" step="1" value="15">
-      <p class="hint">Anything further than this is treated as out of range.</p>
+      <p class="hint">anything further than this counts as out of range.</p>
 
       <label class="slider-label" for="grid-res">
-        Fidelity <output id="grid-res-out">0.004°</output>
+        fidelity <output id="grid-res-out">0.004°</output>
       </label>
       <input type="range" id="grid-res" min="0.002" max="0.01" step="0.001" value="0.004">
-      <div class="slider-ends"><span>High (slower)</span><span>Low (faster)</span></div>
+      <div class="slider-ends"><span>high (slower)</span><span>low (faster)</span></div>
     </section>
 
     <section class="control-group control-group--muted">
-      <h2>About the numbers</h2>
+      <h2>method</h2>
       <p class="hint">
-        Walk times use Manhattan distance (|Δlat| + |Δlon|) at 1.4&nbsp;m/s (~3.1&nbsp;mph), which
-        approximates walking NYC's street grid better than a straight line. They ignore
-        actual routes, lights and hills.
+        walk times are manhattan distance (|Δlat| + |Δlon|) at 1.4 m/s — about 3.1 mph.
+        that fits new york's grid better than a straight line, and still ignores actual
+        routes, lights and hills. the full model is in
+        <a href="https://github.com/BrightsizeLife/navigating-nyc/blob/main/docs/README.md">[the readme]</a>.
       </p>
       <p class="hint" id="data-credit"></p>
+    </section>
+
+    <section class="control-group control-group--muted">
+      <h2>privacy</h2>
+      <p class="hint">
+        no cookies, no analytics, no accounts, nothing stored. all the math runs locally.
+        exactly three things can leave this page, all to free services:
+        map tiles ask carto for the area you're looking at; pressing [locate] sends that one
+        address to the photon/osm geocoder; ticking the road-network box sends sampled
+        coordinates to osrm. that's the entire list. one heads-up: the url remembers your
+        chosen origin so the view is shareable — share it only if you want the address shared.
+      </p>
     </section>
 
   </aside>
 
   <main class="content">
 
-    <div class="tabs" role="tablist" aria-label="Views">
-      <button type="button" role="tab" id="tab-walk" aria-controls="panel-walk" aria-selected="true" class="tab is-active">Walkability</button>
-      <button type="button" role="tab" id="tab-nearest" aria-controls="panel-nearest" aria-selected="false" class="tab">Nearest stations</button>
-      <button type="button" role="tab" id="tab-travel" aria-controls="panel-travel" aria-selected="false" class="tab">Travel time</button>
-      <button type="button" role="tab" id="tab-reference" aria-controls="panel-reference" aria-selected="false" class="tab">Reference table</button>
+    <div class="tabs" role="tablist" aria-label="views">
+      <button type="button" role="tab" id="tab-walk" aria-controls="panel-walk" aria-selected="true" class="tab is-active">walkability</button>
+      <button type="button" role="tab" id="tab-nearest" aria-controls="panel-nearest" aria-selected="false" class="tab">nearest stations</button>
+      <button type="button" role="tab" id="tab-travel" aria-controls="panel-travel" aria-selected="false" class="tab">travel time</button>
+      <button type="button" role="tab" id="tab-reference" aria-controls="panel-reference" aria-selected="false" class="tab">station table</button>
     </div>
 
-    <!-- ---------------------------------------------------------- Walkability -->
+    <!-- ---------------------------------------------------------- walkability -->
     <section class="panel is-active" id="panel-walk" role="tabpanel" aria-labelledby="tab-walk" tabindex="0">
       <p class="panel-intro">
-        Walking time to the nearest station on your selected lines, computed for every cell of a
-        grid over the city. Dark purple is close, bright yellow is far; anything past the walk cap
-        is left transparent.
+        walking time to the nearest station on your selected lines, for every cell of a grid over
+        the city. dark purple is close, pale yellow is far; anything past the walk cap stays
+        transparent. hover the map to read exact minutes.
       </p>
       <div class="map-wrap">
         <div id="map-walk" class="map"></div>
         <div class="map-readout" id="walk-readout" aria-live="off" hidden></div>
       </div>
-      <h3>Coverage across the mapped area</h3>
+      <h3>coverage</h3>
       <p class="hint">
-        Percentages are shares of the whole bounding box, which includes open water and part of
-        New Jersey — so treat them as a way to compare line selections against each other, not as
-        a census of New York. The median and spread describe only the area inside your walk cap,
-        i.e. the part of the map that is actually coloured in.
+        percentages are shares of the whole bounding box — which includes open water and a slice
+        of new jersey, so compare line selections with them rather than reading them as a census.
+        the median and spread describe only the area inside your walk cap: the part that's
+        actually painted.
       </p>
       <div class="stat-grid" id="walk-stats"></div>
     </section>
 
-    <!-- ------------------------------------------------------ Nearest stations -->
+    <!-- ------------------------------------------------------ nearest stations -->
     <section class="panel" id="panel-nearest" role="tabpanel" aria-labelledby="tab-nearest" tabindex="0" hidden>
       <div class="origin-banner" id="nearest-origin"></div>
-      <p class="hint">Stations further away than the walk time cap are left out of all three tables.</p>
+      <p class="hint">stations further than the walk time cap are left out of all three tables.</p>
 
-      <h3>Nearest stations by line</h3>
+      <h3>nearest by line</h3>
       <p class="panel-intro">
-        The three closest stops on each line you selected. A line shows fewer than three rows when
-        its other stops fall outside the walk cap, and none at all when they all do.
+        the three closest stops on each line you selected. a line shows fewer rows when the rest
+        of its stops fall outside the walk cap.
       </p>
       <div class="table-scroll" id="table-by-line"></div>
 
-      <h3>Nearest stations overall</h3>
-      <p class="panel-intro">The three closest stops among your selected lines, whichever line they serve.</p>
+      <h3>nearest overall</h3>
+      <p class="panel-intro">the three closest stops among your selected lines, whichever line they serve.</p>
       <div class="table-scroll" id="table-overall"></div>
 
-      <h3>Nearest stations on other lines</h3>
-      <p class="panel-intro">The three closest stops that serve none of your selected lines — routes you may be walking past.</p>
+      <h3>nearest on other lines</h3>
+      <p class="panel-intro">the three closest stops that serve none of your lines — routes you may be walking past.</p>
       <div class="table-scroll" id="table-unselected"></div>
     </section>
 
-    <!-- ---------------------------------------------------------- Travel time -->
+    <!-- ---------------------------------------------------------- travel time -->
     <section class="panel" id="panel-travel" role="tabpanel" aria-labelledby="tab-travel" tabindex="0" hidden>
       <div class="origin-banner" id="travel-origin"></div>
 
       <div class="travel-controls">
         <div class="travel-field">
-          <label for="travel-mode">Mode</label>
+          <label for="travel-mode">mode</label>
           <select id="travel-mode">
-            <option value="walk" selected>Walk</option>
-            <option value="bike">Bike</option>
-            <option value="bus">Bus</option>
-            <option value="metro">Metro</option>
-            <option value="car">Car</option>
+            <option value="walk" selected>walk</option>
+            <option value="bike">bike</option>
+            <option value="bus">bus</option>
+            <option value="metro">metro</option>
+            <option value="car">car</option>
           </select>
         </div>
         <div class="travel-field">
-          <label for="travel-cap">Time cap <output id="travel-cap-out">20 min</output></label>
+          <label for="travel-cap">time cap <output id="travel-cap-out">20 min</output></label>
           <input type="range" id="travel-cap" min="5" max="60" step="5" value="20">
         </div>
         <div class="travel-field travel-field--checks">
-          <label class="check"><input type="checkbox" id="rush-hour"> Rush hour traffic</label>
-          <label class="check"><input type="checkbox" id="use-osrm"> Use road network (OSRM)</label>
+          <label class="check"><input type="checkbox" id="rush-hour"> rush hour traffic</label>
+          <label class="check"><input type="checkbox" id="use-osrm"> use road network (osrm)</label>
         </div>
         <div class="travel-field">
-          <button type="button" class="btn btn--primary" id="generate-travel">Generate heatmap</button>
+          <button type="button" class="btn btn--primary" id="generate-travel">[generate heatmap]</button>
         </div>
       </div>
 
@@ -167,22 +201,22 @@
       </div>
     </section>
 
-    <!-- ------------------------------------------------------- Reference table -->
+    <!-- ------------------------------------------------------- station table -->
     <section class="panel" id="panel-reference" role="tabpanel" aria-labelledby="tab-reference" tabindex="0" hidden>
       <div class="origin-banner" id="reference-origin"></div>
-      <p class="panel-intro">Every station on your selected lines, with its distance from your address.</p>
+      <p class="panel-intro">every station on your selected lines, with its distance from your address.</p>
 
       <div class="table-toolbar">
-        <label class="visually-hidden" for="ref-search">Filter stations</label>
-        <input type="search" id="ref-search" placeholder="Filter by station, line or borough…" autocomplete="off">
-        <label for="ref-page-size">Rows</label>
+        <label class="visually-hidden" for="ref-search">filter stations</label>
+        <input type="search" id="ref-search" placeholder="filter by station, line or borough…" autocomplete="off">
+        <label for="ref-page-size">rows</label>
         <select id="ref-page-size">
           <option>10</option>
           <option selected>25</option>
           <option>50</option>
           <option>100</option>
         </select>
-        <button type="button" class="btn btn--ghost" id="ref-download">Download CSV</button>
+        <button type="button" class="btn btn--ghost" id="ref-download">[download csv]</button>
         <span class="table-count" id="ref-count" aria-live="polite"></span>
       </div>
 
@@ -193,15 +227,24 @@
   </main>
 </div>
 
+<footer class="app-footer">
+  <p>
+    a <a href="https://cheapsensationalism.com">cheap sensationalism</a> tool ·
+    station data from the mta's public stations file ·
+    tiles © <a href="https://www.openstreetmap.org/copyright">openstreetmap</a> contributors, © <a href="https://carto.com/attributions">carto</a> ·
+    <a href="https://github.com/BrightsizeLife/navigating-nyc">[view source]</a>
+  </p>
+</footer>
+
 <div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
 
 <noscript>
-  <p class="noscript">This page computes walk times in your browser, so it needs JavaScript enabled.</p>
+  <p class="noscript">this page computes walk times in your browser, so it needs javascript turned on. nothing else — no server involved.</p>
 </noscript>
 
-<script src="vendor/leaflet/leaflet.js"></script>
-<script src="data/stations.js"></script>
-<script src="assets/geo.js"></script>
-<script src="assets/app.js"></script>
+<script src="vendor/leaflet/leaflet.js" defer></script>
+<script src="data/stations.js" defer></script>
+<script src="assets/geo.js" defer></script>
+<script src="assets/app.js" defer></script>
 </body>
 </html>
