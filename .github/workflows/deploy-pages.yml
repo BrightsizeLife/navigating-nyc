@@ -1,14 +1,13 @@
 # Publishes docs/ to GitHub Pages on every push to main.
 #
-# Mechanism: force-push the docs/ folder to a gh-pages branch. Creating that
-# branch is what enables Pages on this repo — the default workflow token can
-# push branches (contents: write) but is NOT allowed to call the Pages
-# "create site" API, which is why the actions/configure-pages enablement
-# route fails here. The .nojekyll file skips the Jekyll build so the folder
-# is served exactly as committed.
-#
-# If Pages ever needs re-pointing manually: Settings → Pages → Deploy from a
-# branch → gh-pages / root.
+# Mechanism: force-push the docs/ folder to a gh-pages branch. The default
+# workflow token can push branches (contents: write) but is NOT allowed to
+# call the Pages "create site" API — actions/configure-pages enablement
+# fails with "Resource not accessible by integration" — so serving needs a
+# ONE-TIME manual step: Settings → Pages → Deploy from a branch →
+# gh-pages / root. After that click, every merge to main republishes and
+# Pages redeploys on its own. The .nojekyll file skips the Jekyll build so
+# the folder is served exactly as committed.
 name: deploy-pages
 on:
   push:
