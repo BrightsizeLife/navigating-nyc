@@ -1,8 +1,14 @@
 # Publishes docs/ to GitHub Pages on every push to main.
 #
-# Uses the official Pages actions with enablement:true, so the first run
-# turns Pages on by itself — no Settings → Pages click needed. There is no
-# build step: docs/ is the site, uploaded as-is.
+# Mechanism: force-push the docs/ folder to a gh-pages branch. Creating that
+# branch is what enables Pages on this repo — the default workflow token can
+# push branches (contents: write) but is NOT allowed to call the Pages
+# "create site" API, which is why the actions/configure-pages enablement
+# route fails here. The .nojekyll file skips the Jekyll build so the folder
+# is served exactly as committed.
+#
+# If Pages ever needs re-pointing manually: Settings → Pages → Deploy from a
+# branch → gh-pages / root.
 name: deploy-pages
 on:
   push:
@@ -10,27 +16,26 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  publish:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
-        with:
-          enablement: true
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: docs
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: publish docs/ to the gh-pages branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd docs
+          git init -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          touch .nojekyll
+          git add -A
+          git commit -m "deploy: docs/ at ${GITHUB_SHA}"
+          git push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
