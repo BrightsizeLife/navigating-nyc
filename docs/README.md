@@ -54,11 +54,13 @@ python3 -m http.server 8000 --directory docs
 
 ## Deploying it
 
-**GitHub Pages (primary, automatic).** `.github/workflows/deploy-pages.yml` publishes
-`docs/` to a `gh-pages` branch on every push to `main`; creating that branch is what
-enables Pages, so merging is the entire deploy. The site lives at
-`https://brightsizelife.github.io/navigating-nyc/` and rolling back is `git revert` plus
-a push. The `gh-pages` branch is a deploy artifact — never edit it directly.
+**GitHub Pages (primary).** `.github/workflows/deploy-pages.yml` publishes `docs/` to a
+`gh-pages` branch on every push to `main`. One-time setup, which only a repo admin can
+click (the workflow token isn't allowed to flip it): **Settings → Pages → Deploy from a
+branch → `gh-pages` / root → Save**. From then on merging is the entire deploy; the site
+lives at `https://brightsizelife.github.io/navigating-nyc/` and rolling back is
+`git revert` plus a push. The `gh-pages` branch is a deploy artifact — never edit it
+directly.
 
 **Vercel (optional alternative).** `vercel.json` at the repo root is ready: import the
 repo at vercel.com (Hobby tier, free for non-commercial), keep every default, deploy.
