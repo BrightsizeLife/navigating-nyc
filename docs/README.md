@@ -54,9 +54,19 @@ python3 -m http.server 8000 --directory docs
 
 ## Deploying it
 
-Push the branch, then in the repository's **Settings → Pages**, set the source to the
-`main` branch and the `/docs` folder. No workflow or build is required. Any static host
-works the same way — copy `docs/` and you are done.
+**GitHub Pages (primary, automatic).** `.github/workflows/deploy-pages.yml` publishes
+`docs/` on every push to `main` and enables Pages by itself on its first run — merging
+is the entire deploy. The site lives at `https://brightsizelife.github.io/navigating-nyc/`
+and rolling back is `git revert` plus a push.
+
+**Vercel (optional alternative).** `vercel.json` at the repo root is ready: import the
+repo at vercel.com (Hobby tier, free for non-commercial), keep every default, deploy.
+It serves the same `docs/` folder with no build, and adds what Pages can't: real
+response headers (the CSP moves up a layer and gains `frame-ancestors`, plus `nosniff`
+and `Permissions-Policy`) and a preview URL per PR. Both hosts can run at once — the
+page is identical static files either way.
+
+Any other static host works the same way — copy `docs/` and you are done.
 
 ## Where the data comes from
 
