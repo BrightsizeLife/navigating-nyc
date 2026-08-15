@@ -1,0 +1,100 @@
+/*
+ * cs-light.css — light-mode derivation of the Cheap Sensationalism tokens.
+ *
+ * The canonical system (colors_and_type.css) is dark by rule; Derek asked for
+ * this piece in light mode, so this layer redefines only the custom properties
+ * and leaves the canonical file untouched. Load it AFTER colors_and_type.css.
+ * Delete this one <link> and the page falls back to canonical dark.
+ *
+ * Derivation logic, so the swap is principled rather than eyeballed:
+ *
+ * - The dark ground (#0a0b10, cool blue-black) and the primary text
+ *   (#f0ede6, warm off-white) trade places: warm paper, cool-black ink.
+ *   Same two brand hues, roles reversed.
+ * - Neons and data signal colors keep their canonical values for FILLS
+ *   (chips, swatches, borders, map marks) but get darker "-ink" companions
+ *   for TEXT, because #00D4FF-on-white can't pass WCAG AA. Every -ink value
+ *   here measures ≥ 4.5:1 against --cs-bg-card (#ffffff).
+ * - Shadows drop from dark-mode alphas (0.4–0.8) to light-appropriate ones.
+ * - Semantics are untouched: --cs-data-warm still means "warm anomaly",
+ *   the neon rotation order still cycles cyan→coral→amber→purple→lime.
+ */
+
+:root {
+
+  /* ── Surfaces: warm paper, from the canonical text family ── */
+  --cs-bg:           #f2f0e9;   /* the page ground — warm off-white */
+  --cs-bg-surface:   #faf9f5;   /* lifted surface (sidebar, cards) */
+  --cs-bg-overlay:   rgba(10,11,16,0.04);
+  --cs-bg-card:      #ffffff;   /* data card / table surface */
+  --cs-bg-code:      #eceae1;   /* code-ish wells (sliders, chips) */
+
+  /* ── Text: the canonical ground becomes the ink ── */
+  --cs-text:         #16171d;   /* primary ink, from the #0a0b10 family */
+  --cs-text-bright:  #0a0b10;   /* high-emphasis — the canonical bg itself */
+  --cs-text-prose:   #33353d;   /* long-read body */
+  --cs-muted:        #67635b;   /* canonical #8a8680 darkened to pass AA small-text */
+  --cs-dim:          #c9c4b8;   /* decorative, dividers — canonical #44413b flipped light */
+
+  /* ── Borders: dark alphas instead of white alphas ── */
+  --cs-border:       rgba(10,11,16,0.14);
+  --cs-border-dim:   rgba(10,11,16,0.07);
+  --cs-border-data:  #d8d4c9;
+  --cs-border-dark:  #c2beb2;
+
+  /* ── Neon accents: canonical fills + light-mode ink companions ── */
+  /* Fills stay canonical (swatches, borders, glows). Text uses -ink. */
+  --cs-cyan-ink:     #007a99;
+  --cs-coral-ink:    #c92f2f;
+  --cs-amber-ink:    #786d00;
+  --cs-purple-ink:   #6a3fd8;
+  --cs-lime-ink:     #067a5c;
+  --cs-link:         #0b63cf;   /* canonical #007BFF nudged darker for AA on paper */
+
+  /* ── Data signal colors: fills canonical, text gets -ink ── */
+  --cs-data-warm-ink:  #b93227; /* from #E8594F */
+  --cs-data-cold-ink:  #2a63a8; /* from #4A90D9 */
+  --cs-data-gold-ink:  #8f5f04; /* from #F5A623 */
+  --cs-data-green-ink: #0b7a4d; /* from #69f0ae */
+
+  /* ── Shadows: light-mode weights ── */
+  --cs-shadow-sm:          0 1px 3px rgba(10,11,16,0.08);
+  --cs-shadow-md:          0 3px 14px rgba(10,11,16,0.09);
+  --cs-shadow-xl:          0 16px 44px rgba(10,11,16,0.14);
+  --cs-shadow-glow-cyan:   0 0 24px rgba(0,212,255,0.25);
+  --cs-shadow-glow-coral:  0 0 24px rgba(255,87,87,0.25);
+  --cs-shadow-glow-violet: 0 0 24px rgba(179,136,255,0.25);
+  --cs-shadow-tooltip:     0 4px 18px rgba(10,11,16,0.16);
+  --cs-shadow-modal:       0 8px 36px rgba(10,11,16,0.22);
+}
+
+/* Canonical classes that hardcode dark-mode assumptions, re-grounded.
+   Kept to the minimum — everything else inherits the token swap above. */
+
+.cs-code { color: var(--cs-text-prose); }
+
+.cs-data-section-head { color: var(--cs-data-warm-ink); }
+
+.cs-data-tab.active {
+  color: var(--cs-data-warm-ink);
+  border-bottom-color: var(--cs-data-warm);
+}
+
+/* Filled states use the -ink value as the FILL: white on #E8594F is only
+   3.5:1, but white on #b93227 is 5.9:1 — passes AA at button sizes. */
+.cs-data-cta { color: var(--cs-data-warm-ink); border-color: var(--cs-data-warm); }
+.cs-data-cta:hover { background: var(--cs-data-warm-ink); border-color: var(--cs-data-warm-ink); color: #ffffff; }
+
+.cs-data-toggle { border-color: var(--cs-border-dark); }
+.cs-data-toggle:hover { border-color: var(--cs-muted); color: var(--cs-text); }
+.cs-data-toggle.active { background: var(--cs-data-warm-ink); border-color: var(--cs-data-warm-ink); color: #ffffff; }
+
+/* Inline datum spans: same tinted washes, ink-weight text */
+.cs-datum-warm    { color: var(--cs-data-warm-ink); }
+.cs-datum-cold    { color: var(--cs-data-cold-ink); }
+.cs-datum-neutral { color: var(--cs-data-gold-ink); }
+.cs-datum-green   { color: var(--cs-data-green-ink); }
+
+.cs-wip-tag { color: var(--cs-amber-ink); }
+
+.cs-essay-byline { color: var(--cs-muted); }

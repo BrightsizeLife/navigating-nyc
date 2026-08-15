@@ -1,0 +1,492 @@
+/*
+ * Cheap Sensationalism Design System
+ * colors_and_type.css
+ *
+ * One brand. One token system.
+ *
+ * Weird Weather is a data journalism piece within Cheap Sensationalism —
+ * not a separate brand. Its monospace-heavy, data-dense aesthetic is a
+ * *content mode*, not a different identity.
+ *
+ * Token structure:
+ *   --cs-*          Core brand tokens (colors, type, spacing, radii)
+ *   --cs-data-*     Semantic data/signal colors (used in data journalism pieces)
+ *   .mode-data      Body/wrapper class for data journalism UI
+ *   .mode-essay     Used within data pages for long-form prose sections
+ *
+ * Fonts: Google Fonts import below.
+ * Monospace stack uses system fonts (SF Mono / Fira Code / Consolas).
+ */
+
+/* ─── Fonts ─────────────────────────────────────────────────────────────────
+   Deviation from the canonical file (documented): the Google Fonts @import is
+   replaced with self-hosted Space Mono (../vendor/fonts/, SIL OFL 1.1) so the
+   page makes no third-party font requests. This page runs entirely in
+   .mode-data, so Space Mono is the only webfont it needs; Inter and Playfair
+   fall back to their system stacks if any cs- class reaches for them. */
+@font-face {
+  font-family: 'Space Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../vendor/fonts/space-mono-latin-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Space Mono';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../vendor/fonts/space-mono-latin-400-italic.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Space Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('../vendor/fonts/space-mono-latin-700-normal.woff2') format('woff2');
+}
+
+/* ─── Base Reset ────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   CORE BRAND TOKENS
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+:root {
+
+  /* ── Surfaces ── */
+  --cs-bg:           #0a0b10;   /* near-black, very slight cool blue — the base */
+  --cs-bg-surface:   #111318;   /* slightly lifted surface */
+  --cs-bg-overlay:   rgba(255,255,255,0.04); /* subtle card bg */
+  --cs-bg-card:      #111111;   /* data card / code surface */
+  --cs-bg-code:      #0d0d0d;   /* code block background */
+
+  /* ── Text ── */
+  --cs-text:         #f0ede6;   /* warm off-white — primary */
+  --cs-text-bright:  #f0f0f0;   /* near-pure white for high-emphasis */
+  --cs-text-prose:   #d4d4d4;   /* essay body — slightly dimmer for long reads */
+  --cs-muted:        #8a8680;   /* secondary text, labels */
+  --cs-dim:          #44413b;   /* decorative, dividers, dashes */
+
+  /* ── Borders ── */
+  --cs-border:       rgba(255,255,255,0.10); /* default border */
+  --cs-border-dim:   rgba(255,255,255,0.05); /* very faint separator */
+  --cs-border-data:  #222222;   /* data UI borders (sharper, less alpha) */
+  --cs-border-dark:  #1a1a1a;   /* darkest separator */
+
+  /* ── Neon Accents ── */
+  /* Used in nav pills, kickers, flash animations — rotate by index */
+  --cs-cyan:         #00D4FF;   /* accent-0 */
+  --cs-coral:        #FF5757;   /* accent-1 */
+  --cs-amber:        #E8E048;   /* accent-2 */
+  --cs-purple:       #B388FF;   /* accent-3 */
+  --cs-lime:         #06D6A0;   /* accent-4 */
+  --cs-link:         #007BFF;   /* hyperlinks */
+
+  /* Rotation aliases (matches HomeView getColorClasses pattern) */
+  --cs-accent-0:     var(--cs-cyan);
+  --cs-accent-1:     var(--cs-coral);
+  --cs-accent-2:     var(--cs-amber);
+  --cs-accent-3:     var(--cs-purple);
+  --cs-accent-4:     var(--cs-lime);
+
+  /* ── Data / Signal Colors ── */
+  /* Semantic colors for data journalism. Used in Weird Weather and any
+     future data pieces. Warm/cold carry scientific meaning; not UI accents. */
+  --cs-data-warm:    #E8594F;   /* warm anomaly, above-normal */
+  --cs-data-cold:    #4A90D9;   /* cold anomaly, below-normal */
+  --cs-data-gold:    #F5A623;   /* neutral highlight, national avg */
+  --cs-data-green:   #69f0ae;   /* positive match, within normal */
+
+  /* Data gradient (used in data journalism headers, posters) */
+  --cs-data-gradient: linear-gradient(90deg, #E8594F, #F5A623, #4A90D9);
+
+  /* ── Typography ── */
+  --cs-font-sans:    'Inter', system-ui, sans-serif;
+  --cs-font-serif:   'Playfair Display', Georgia, serif;
+  --cs-font-mono:    'Space Mono', 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  --cs-font-prose:   'Georgia', 'Times New Roman', serif; /* essay body only */
+
+  /* Type scale */
+  --cs-text-xs:      0.625rem;   /* 10px — labels, kickers */
+  --cs-text-sm:      0.75rem;    /* 12px */
+  --cs-text-base:    0.9375rem;  /* 15px — default body */
+  --cs-text-md:      1rem;       /* 16px */
+  --cs-text-lg:      1.125rem;   /* 18px */
+  --cs-text-xl:      1.25rem;    /* 20px */
+  --cs-text-2xl:     1.5rem;     /* 24px — section headers */
+  --cs-text-3xl:     1.875rem;   /* 30px */
+  --cs-text-4xl:     2.25rem;    /* 36px */
+  --cs-text-5xl:     3rem;       /* 48px — hero title */
+
+  /* Data/mono scale (data journalism UI) */
+  --cs-text-data-xs:   0.65rem;  /* kickers, labels */
+  --cs-text-data-sm:   0.72rem;  /* captions, bylines */
+  --cs-text-data-base: 0.82rem;  /* table cells, code */
+  --cs-text-data-md:   0.9rem;   /* header subtitle */
+  --cs-text-data-lg:   1rem;     /* general data UI */
+
+  /* Essay type scale */
+  --cs-text-essay-body:  19px;   /* long-form prose */
+  --cs-text-essay-title: 2.8rem; /* essay title (serif) */
+  --cs-text-essay-sub:   1.15rem;/* essay subtitle */
+  --cs-text-essay-head:  0.75rem;/* section head (mono, uppercase) */
+
+  /* Data journalism header */
+  --cs-text-datahdr: 2.2rem;     /* e.g. "Weird Weather" h1 */
+
+  /* Line Heights */
+  --cs-leading-tight:   1.2;
+  --cs-leading-snug:    1.4;
+  --cs-leading-base:    1.6;
+  --cs-leading-relaxed: 1.75;
+
+  /* Tracking */
+  --cs-tracking-tight:   -0.02em;
+  --cs-tracking-normal:  0;
+  --cs-tracking-wide:    0.05em;
+  --cs-tracking-widest:  0.15em;
+  --cs-tracking-ultra:   0.3em;
+
+  /* ── Spacing ── */
+  --cs-space-1:    0.25rem;
+  --cs-space-2:    0.5rem;
+  --cs-space-3:    0.75rem;
+  --cs-space-4:    1rem;
+  --cs-space-6:    1.5rem;
+  --cs-space-8:    2rem;
+  --cs-space-12:   3rem;
+  --cs-space-16:   4rem;
+  --cs-space-24:   6rem;
+
+  /* ── Radii ── */
+  --cs-radius-sm:   0.25rem;   /* 4px — data buttons, small tags */
+  --cs-radius-md:   0.5rem;    /* 8px — data cards */
+  --cs-radius-lg:   1rem;      /* 16px */
+  --cs-radius-xl:   1.5rem;    /* 24px */
+  --cs-radius-2xl:  2rem;      /* 32px */
+  --cs-radius-3xl:  3rem;      /* 48px — album cards */
+  --cs-radius-full: 9999px;    /* pill */
+
+  /* ── Shadows ── */
+  --cs-shadow-sm:          0 1px 4px rgba(0,0,0,0.4);
+  --cs-shadow-md:          0 4px 20px rgba(0,0,0,0.5);
+  --cs-shadow-xl:          0 20px 60px rgba(0,0,0,0.6);
+  --cs-shadow-glow-cyan:   0 0 24px rgba(0,212,255,0.2);
+  --cs-shadow-glow-coral:  0 0 24px rgba(255,87,87,0.2);
+  --cs-shadow-glow-violet: 0 0 24px rgba(179,136,255,0.2);
+  --cs-shadow-tooltip:     0 4px 20px rgba(0,0,0,0.6);
+  --cs-shadow-modal:       0 8px 40px rgba(0,0,0,0.8);
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   BASE ELEMENT STYLES
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+.cs-body {
+  font-family: var(--cs-font-sans);
+  background-color: var(--cs-bg);
+  color: var(--cs-text);
+  font-size: var(--cs-text-base);
+  line-height: var(--cs-leading-base);
+  overflow-x: hidden;
+}
+
+/* Headings */
+.cs-h1 {
+  font-family: var(--cs-font-sans);
+  font-size: var(--cs-text-5xl);
+  font-weight: 400;
+  letter-spacing: var(--cs-tracking-normal);
+  color: var(--cs-text);
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.cs-h2 {
+  font-family: var(--cs-font-sans);
+  font-size: var(--cs-text-2xl);
+  font-weight: 400;
+  color: var(--cs-text);
+  letter-spacing: var(--cs-tracking-normal);
+}
+
+.cs-h3 {
+  font-family: var(--cs-font-sans);
+  font-size: var(--cs-text-lg);
+  font-weight: 700;
+  color: var(--cs-text);
+}
+
+.cs-h4-muted {
+  font-family: var(--cs-font-sans);
+  font-size: var(--cs-text-sm);
+  font-weight: 600;
+  color: var(--cs-muted);
+  text-transform: uppercase;
+  letter-spacing: var(--cs-tracking-widest);
+}
+
+.cs-section-header {
+  font-family: var(--cs-font-sans);
+  font-size: var(--cs-text-lg);
+  font-weight: 700;
+  color: var(--cs-text);
+  text-transform: lowercase;
+  letter-spacing: var(--cs-tracking-wide);
+}
+
+.cs-kicker {
+  font-family: var(--cs-font-sans);
+  font-size: var(--cs-text-xs);
+  font-weight: 900;
+  letter-spacing: var(--cs-tracking-widest);
+  text-transform: uppercase;
+}
+
+.cs-body-text {
+  font-family: var(--cs-font-sans);
+  font-size: var(--cs-text-base);
+  line-height: var(--cs-leading-base);
+  color: var(--cs-text);
+}
+
+.cs-description {
+  font-family: var(--cs-font-sans);
+  font-size: var(--cs-text-xs);
+  font-style: italic;
+  color: var(--cs-muted);
+  line-height: var(--cs-leading-relaxed);
+}
+
+.cs-display {
+  font-family: var(--cs-font-serif);
+  font-weight: 700;
+  letter-spacing: var(--cs-tracking-tight);
+  line-height: var(--cs-leading-tight);
+}
+
+.cs-display-italic {
+  font-family: var(--cs-font-serif);
+  font-style: italic;
+  font-weight: 400;
+}
+
+.cs-mono {
+  font-family: var(--cs-font-mono);
+  font-size: var(--cs-text-base);
+}
+
+.cs-link {
+  color: var(--cs-link);
+  text-decoration: none;
+}
+.cs-link:hover { text-decoration: underline; }
+
+.cs-bracket-cta {
+  color: var(--cs-link);
+  font-family: var(--cs-font-sans);
+  font-size: var(--cs-text-base);
+}
+.cs-bracket-cta:hover { text-decoration: underline; }
+
+.cs-dash {
+  color: var(--cs-dim);
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.cs-wip-tag {
+  color: var(--cs-amber);
+  font-size: var(--cs-text-sm);
+  font-weight: 700;
+  margin-left: 0.5rem;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   DATA JOURNALISM MODE
+   Apply .mode-data to <body> or a wrapping element for data-dense pages
+   (Weird Weather analysis, data tables, code views, future data pieces)
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+.mode-data {
+  background: var(--cs-bg);
+  color: var(--cs-text);
+  font-family: var(--cs-font-mono);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+/* Gradient title (e.g. "Weird Weather" header) */
+.cs-datahdr-title {
+  font-family: var(--cs-font-mono);
+  font-size: var(--cs-text-datahdr);
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  background: var(--cs-data-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Section head (mono kicker with rule) */
+.cs-data-section-head {
+  font-family: var(--cs-font-mono);
+  font-size: var(--cs-text-essay-head);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--cs-data-warm);
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--cs-border-dark);
+}
+
+.cs-data-label {
+  font-family: var(--cs-font-mono);
+  font-size: var(--cs-text-data-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--cs-muted);
+}
+
+/* Inline datum spans */
+.cs-datum-warm    { color: var(--cs-data-warm);  background: rgba(232,89,79,.1);   padding: 0.1em 0.3em; border-radius: 3px; font-weight: 600; font-family: var(--cs-font-mono); font-size: 0.85em; }
+.cs-datum-cold    { color: var(--cs-data-cold);  background: rgba(74,144,217,.1);  padding: 0.1em 0.3em; border-radius: 3px; font-weight: 600; font-family: var(--cs-font-mono); font-size: 0.85em; }
+.cs-datum-neutral { color: var(--cs-data-gold);  background: rgba(245,166,35,.1);  padding: 0.1em 0.3em; border-radius: 3px; font-weight: 600; font-family: var(--cs-font-mono); font-size: 0.85em; }
+.cs-datum-green   { color: var(--cs-data-green); background: rgba(105,240,174,.08);padding: 0.1em 0.3em; border-radius: 3px; font-weight: 600; font-family: var(--cs-font-mono); font-size: 0.85em; }
+
+/* Stat card */
+.cs-stat-card {
+  background: var(--cs-bg-card);
+  border: 1px solid var(--cs-border-data);
+  border-radius: var(--cs-radius-md);
+  padding: 1.2rem;
+}
+.cs-stat-card .label {
+  color: var(--cs-muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.4rem;
+  font-family: var(--cs-font-mono);
+}
+.cs-stat-card .value {
+  font-size: 1.8rem;
+  font-weight: 700;
+  line-height: 1.2;
+  font-family: var(--cs-font-mono);
+}
+
+/* Code block */
+.cs-code {
+  font-family: var(--cs-font-mono);
+  font-size: var(--cs-text-data-base);
+  background: var(--cs-bg-code);
+  border: 1px solid var(--cs-border-dark);
+  border-radius: var(--cs-radius-md);
+  padding: 1.2rem 1.5rem;
+  line-height: 1.7;
+  color: #c8c8c8;
+  overflow-x: auto;
+}
+
+/* Data tab */
+.cs-data-tab {
+  font-family: var(--cs-font-mono);
+  font-size: var(--cs-text-data-base);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--cs-muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 0.75rem 1.2rem;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+}
+.cs-data-tab:hover { color: var(--cs-text); }
+.cs-data-tab.active {
+  color: var(--cs-data-warm);
+  border-bottom-color: var(--cs-data-warm);
+}
+
+/* Data toggle button */
+.cs-data-toggle {
+  background: var(--cs-bg-card);
+  border: 1px solid #333;
+  color: var(--cs-muted);
+  padding: 0.35rem 0.8rem;
+  border-radius: var(--cs-radius-sm);
+  font-family: var(--cs-font-mono);
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.cs-data-toggle:hover { border-color: #555; color: #ccc; }
+.cs-data-toggle.active {
+  background: var(--cs-data-warm);
+  border-color: var(--cs-data-warm);
+  color: #fff;
+}
+
+/* Data CTA button */
+.cs-data-cta {
+  font-family: var(--cs-font-mono);
+  font-size: 0.82rem;
+  color: var(--cs-data-warm);
+  text-decoration: none;
+  letter-spacing: 0.05em;
+  padding: 0.7rem 1.6rem;
+  border: 1px solid var(--cs-data-warm);
+  border-radius: var(--cs-radius-sm);
+  transition: all 0.2s;
+  display: inline-block;
+  background: transparent;
+  cursor: pointer;
+}
+.cs-data-cta:hover {
+  background: var(--cs-data-warm);
+  color: #000;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   ESSAY / LONG-FORM READING MODE
+   Used within data journalism pages for the prose/essay tab
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+.cs-essay-body {
+  font-family: var(--cs-font-prose);
+  font-size: var(--cs-text-essay-body);
+  line-height: 1.75;
+  color: var(--cs-text-prose);
+}
+
+.cs-essay-title {
+  font-family: var(--cs-font-prose);
+  font-size: var(--cs-text-essay-title);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--cs-text-bright);
+}
+
+.cs-essay-subtitle {
+  font-family: var(--cs-font-prose);
+  font-size: var(--cs-text-essay-sub);
+  font-style: italic;
+  color: var(--cs-muted);
+}
+
+.cs-essay-byline {
+  font-family: var(--cs-font-mono);
+  font-size: var(--cs-text-data-sm);
+  letter-spacing: 0.05em;
+  color: #666;
+}
